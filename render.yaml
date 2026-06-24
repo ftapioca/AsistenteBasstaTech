@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: bot-asistente-familiar
+    runtime: docker
+    plan: starter
+    region: oregon
+    numInstances: 1
+    healthCheckPath: /health
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: DATABASE_URL
+        value: file:/app/data/dev.db
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5.5
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: DEFAULT_TIMEZONE
+        value: America/Santiago
+      - key: DEFAULT_DAILY_BRIEFING_TIME
+        value: 08:30
+      - key: REMINDER_MINUTES_BEFORE
+        value: "30"
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1

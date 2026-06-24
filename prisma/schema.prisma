@@ -1,0 +1,106 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Family {
+  id        String    @id @default(uuid())
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  users     User[]
+  tasks     Task[]
+  settings  Settings?
+}
+
+model User {
+  id                String             @id @default(uuid())
+  familyId          String
+  name              String
+  phoneNumber       String             @unique
+  telegramUserId    String?            @unique
+  telegramChatId    String?            @unique
+  telegramUsername  String?
+  role              UserRole           @default(USER)
+  timezone          String
+  dailyBriefingTime String
+  isActive          Boolean            @default(true)
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  family            Family             @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  createdTasks      Task[]             @relation("TaskCreatedBy")
+  assignedTasks     Task[]             @relation("TaskAssignedTo")
+  briefings         DailyBriefingLog[]
+}
+
+model Task {
+  id               String      @id @default(uuid())
+  familyId         String
+  createdByUserId  String
+  assignedToUserId String?
+  title            String
+  description      String?
+  status           TaskStatus  @default(PENDING)
+  priority         Priority    @default(MEDIUM)
+  scope            TaskScope
+  dueDate          DateTime?
+  reminderSent     Boolean     @default(false)
+  completedAt      DateTime?
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  family           Family      @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  createdByUser    User        @relation("TaskCreatedBy", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  assignedToUser   User?       @relation("TaskAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+}
+
+model Settings {
+  id                    String   @id @default(uuid())
+  familyId              String   @unique
+  reminderMinutesBefore Int      @default(30)
+  timezone              String   @default("America/Santiago")
+  dailyBriefingTime     String   @default("08:30")
+  family                Family   @relation(fields: [familyId], references: [id], onDelete: Cascade)
+}
+
+model DailyBriefingLog {
+  id        String   @id @default(uuid())
+  userId    String
+  date      String
+  sentAt    DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model ChatContext {
+  id         String   @id @default(uuid())
+  chatId     String   @unique
+  taskIdsJson String
+  updatedAt  DateTime @updatedAt
+}
+
+enum UserRole {
+  FAMILY_ADMIN
+  USER
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum TaskScope {
+  PERSONAL
+  FAMILY
+}
