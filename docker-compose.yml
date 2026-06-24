@@ -1,4 +1,20 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bot_asistente_familiar
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d bot_asistente_familiar']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   app:
     build:
       context: .
@@ -6,8 +22,12 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: file:/app/data/dev.db
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/bot_asistente_familiar?schema=public
     ports:
       - '3000:3000'
-    volumes:
-      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

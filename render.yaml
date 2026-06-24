@@ -2,7 +2,7 @@ services:
   - type: web
     name: bot-asistente-familiar
     runtime: docker
-    plan: starter
+    plan: free
     region: oregon
     numInstances: 1
     healthCheckPath: /health
@@ -14,7 +14,9 @@ services:
       - key: PORT
         value: "3000"
       - key: DATABASE_URL
-        value: file:/app/data/dev.db
+        fromDatabase:
+          name: bot-asistente-familiar-db
+          property: connectionString
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
@@ -27,7 +29,7 @@ services:
         value: 08:30
       - key: REMINDER_MINUTES_BEFORE
         value: "30"
-    disk:
-      name: data
-      mountPath: /app/data
-      sizeGB: 1
+databases:
+  - name: bot-asistente-familiar-db
+    plan: free
+    region: oregon

@@ -5,7 +5,12 @@ const envSchema = z.object({
     .enum(['development', 'test', 'production'])
     .default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
-  DATABASE_URL: z.string().min(1).default('file:./dev.db'),
+  DATABASE_URL: z
+    .string()
+    .min(1)
+    .default(
+      'postgresql://postgres:postgres@localhost:5432/bot_asistente_familiar?schema=public',
+    ),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.5'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),

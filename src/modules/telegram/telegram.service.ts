@@ -83,7 +83,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy() {
-    this.bot?.stop();
+    if (!this.bot) {
+      return;
+    }
+
+    try {
+      this.bot.stop();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.warn(`No se pudo detener Telegram limpiamente: ${message}`);
+    }
   }
 
   async sendText(chatId: string, text: string) {

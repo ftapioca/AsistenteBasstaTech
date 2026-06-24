@@ -7,7 +7,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - NestJS
 - TypeScript
 - Prisma ORM
-- SQLite
+- PostgreSQL
 - Telegraf
 - OpenAI API
 - Docker
@@ -49,7 +49,8 @@ Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear
 ```bash
 npm install
 cp .env.example .env
-npm run db:init
+docker compose up -d db
+npm run prisma:deploy
 npm run prisma:seed
 npm run start:dev
 ```
@@ -98,17 +99,17 @@ Configuracion recomendada en Render:
 
 - tipo de servicio: `Web Service`
 - runtime: `Docker`
-- plan minimo: `starter`
+- plan web: `free`
+- base de datos: `Render Postgres free`
 - instancias: `1`
 - health check: `/health`
-- disco persistente montado en `/app/data`
 
 Importante:
 
-- si usas `SQLite`, necesitas disco persistente
-- los discos persistentes solo estan disponibles en servicios pagos
-- con disco persistente no debes escalar a mas de una instancia
+- el proyecto ya no usa SQLite en produccion
+- `DATABASE_URL` se inyecta desde Render Postgres mediante `fromDatabase`
 - con un bot de Telegram por polling tampoco debes correr mas de una instancia, o tendras error `409 Conflict`
+- la base Postgres free de Render expira si queda 30 dias sin uso
 
 Pasos:
 
@@ -123,7 +124,7 @@ Pasos:
 
 Valores relevantes ya definidos en `render.yaml`:
 
-- `DATABASE_URL=file:/app/data/dev.db`
+- `DATABASE_URL` desde `fromDatabase`
 - `PORT=3000`
 - `NODE_ENV=production`
 
@@ -137,6 +138,17 @@ Recomendacion:
 
 - rota tu `OPENAI_API_KEY` y tu `TELEGRAM_BOT_TOKEN`
 - esos secretos ya fueron expuestos durante esta sesion y no deberian seguir vigentes
+
+### Local con Docker Compose
+
+`docker-compose.yml` ya incluye un contenedor `postgres` para desarrollo local:
+
+```bash
+docker compose up -d db
+npm run prisma:deploy
+npm run prisma:seed
+npm run start:dev
+```
 
 ### Notas de implementacion
 
