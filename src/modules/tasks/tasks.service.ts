@@ -58,6 +58,9 @@ type PendingAction =
       };
     }
   | {
+      type: 'RENAME_FAMILY_WIZARD';
+    }
+  | {
       type: 'EDIT_TASK_SELECTION';
     }
   | {

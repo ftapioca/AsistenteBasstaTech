@@ -18,4 +18,16 @@ export class FamiliesService {
       },
     });
   }
+
+  async renameFamily(familyId: string, name: string) {
+    return this.prisma.family.update({
+      where: { id: familyId },
+      data: {
+        name,
+      },
+      include: {
+        settings: true,
+      },
+    });
+  }
 }

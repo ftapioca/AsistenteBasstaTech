@@ -27,6 +27,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Edicion contextual de tareas con `/editar`
 - Alertas configurables por usuario con `/alertas`
 - Override de alertas por tarea desde el editor contextual
+- Renombrado de familia para administradores
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
 - Recordatorios automaticos
 - Briefing diario sin duplicados
@@ -100,6 +101,7 @@ La API HTTP queda en `http://localhost:3000`:
 - `/alertas` permite definir la anticipacion predeterminada de recordatorios por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
+- `Editar familia` ahora permite renombrar la familia y seguir agregando o quitando miembros
 - Al cerrar el editor, el bot muestra el estado final real de la tarea en vez de responder que la edicion fue cancelada
 - El bot usa jerarquia visual con `bold` en encabezados, preguntas, etiquetas y numeracion; el contenido de la tarea queda en texto regular
 - Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado
@@ -141,6 +143,11 @@ Configuracion avanzada de alertas y modelado de subtareas:
 2. El bot pide compartir contacto
 3. Si el telefono coincide con un usuario precreado, se vincula a esa familia
 4. Si no coincide, se crea una nueva familia y ese usuario queda como `FAMILY_ADMIN`
+
+Notas operativas del onboarding:
+
+- la vinculacion ahora normaliza mejor telefonos chilenos para evitar falsos negativos entre formatos como `+569...`, `569...`, `09...` o `9...`
+- si un telefono fue vinculado por error en produccion antes de este fix, puede requerir limpieza manual del `User` o de la familia creada por error
 
 ### Produccion con Docker
 

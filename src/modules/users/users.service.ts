@@ -60,12 +60,13 @@ export class UsersService {
     telegramUsername?: string | null;
   }) {
     const family = await this.familiesService.createFamily(input.familyName);
+    const phoneNumber = normalizePhoneNumber(input.phoneNumber);
 
     return this.prisma.user.create({
       data: {
         familyId: family.id,
         name: input.name,
-        phoneNumber: normalizePhoneNumber(input.phoneNumber),
+        phoneNumber,
         telegramUserId: input.telegramUserId,
         telegramChatId: input.telegramChatId,
         telegramUsername: input.telegramUsername ?? null,
@@ -93,8 +94,8 @@ export class UsersService {
     }
 
     const phoneNumber = normalizePhoneNumber(dto.phoneNumber);
-    const existing = await this.prisma.user.findUnique({
-      where: { phoneNumber },
+    const existing = await this.prisma.user.findFirst({
+      where: { phoneNumber: { in: buildPhoneLookupVariants(dto.phoneNumber) } },
     });
 
     if (existing && existing.familyId !== admin.familyId) {
@@ -114,6 +115,7 @@ export class UsersService {
         where: { id: existing.id },
         data: {
           name: dto.name,
+          phoneNumber,
           isActive: true,
         },
       });
@@ -193,8 +195,10 @@ export class UsersService {
     fallbackName: string;
   }) {
     const phoneNumber = normalizePhoneNumber(input.phoneNumber);
-    const existing = await this.prisma.user.findUnique({
-      where: { phoneNumber },
+    const existing = await this.prisma.user.findFirst({
+      where: {
+        phoneNumber: { in: buildPhoneLookupVariants(input.phoneNumber) },
+      },
       include: {
         family: {
           include: {
@@ -227,6 +231,7 @@ export class UsersService {
     return this.prisma.user.update({
       where: { id: existing.id },
       data: {
+        phoneNumber,
         telegramUserId: input.telegramUserId,
         telegramChatId: input.telegramChatId,
         telegramUsername: input.telegramUsername ?? null,
@@ -266,6 +271,17 @@ export class UsersService {
         },
       },
     });
+  }
+
+  async renameFamily(adminUserId: string, familyName: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede cambiar el nombre de la familia.',
+      );
+    }
+
+    return this.familiesService.renameFamily(admin.familyId, familyName.trim());
   }
 
   async getUsersEligibleForBriefing() {
@@ -354,5 +370,42 @@ export class UsersService {
 }
 
 function normalizePhoneNumber(phoneNumber: string) {
-  return phoneNumber.replace(/[^\d+]/g, '');
+  const digits = phoneNumber.replace(/\D/g, '');
+
+  if (digits.startsWith('569') && digits.length === 11) {
+    return digits;
+  }
+
+  if (digits.startsWith('56') && digits.length >= 10) {
+    return digits;
+  }
+
+  if (digits.startsWith('09') && digits.length === 10) {
+    return `56${digits.slice(1)}`;
+  }
+
+  if (digits.startsWith('9') && digits.length === 9) {
+    return `56${digits}`;
+  }
+
+  return digits;
+}
+
+function buildPhoneLookupVariants(phoneNumber: string) {
+  const normalized = normalizePhoneNumber(phoneNumber);
+  const rawDigits = phoneNumber.replace(/\D/g, '');
+  const variants = new Set<string>([
+    normalized,
+    `+${normalized}`,
+    rawDigits,
+    `+${rawDigits}`,
+  ]);
+
+  if (normalized.startsWith('56') && normalized.length === 11) {
+    variants.add(normalized.slice(2));
+    variants.add(`+${normalized.slice(2)}`);
+    variants.add(`0${normalized.slice(2)}`);
+  }
+
+  return [...variants].filter(Boolean);
 }

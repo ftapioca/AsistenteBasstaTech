@@ -115,6 +115,7 @@ const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
 const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
 const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
+const CALLBACK_FAMILY_RENAME = 'family:rename';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -677,6 +678,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const addMemberReply = await this.tryHandleAddMemberWizardText(ctx);
     if (addMemberReply) {
       return addMemberReply;
+    }
+
+    const renameFamilyReply = await this.tryHandleRenameFamilyText(ctx);
+    if (renameFamilyReply) {
+      return renameFamilyReply;
     }
 
     const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
@@ -1645,6 +1651,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data === CALLBACK_FAMILY_RENAME) {
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'RENAME_FAMILY_WIZARD',
+      });
+      return {
+        answerText: 'Renombrar familia',
+        clearMarkup: true,
+        reply: [
+          `El nombre actual es "${user.family.name}".`,
+          '',
+          'Escribe el nuevo nombre de la familia.',
+          'Si prefieres salir, responde "Cancelar".',
+        ].join('\n'),
+      };
+    }
+
     if (data.startsWith('family:remove:')) {
       const targetUserId = data.replace('family:remove:', '');
       const members = await this.usersService.listManagedUsers(user.id);
@@ -1753,6 +1775,41 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     await this.tasksService.clearPendingAction(String(ctx.chat.id));
     return `Listo. Agregue a ${createdUser.name} a la familia. Esa persona ya puede escribir /start y vincular su cuenta.`;
+  }
+
+  private async tryHandleRenameFamilyText(
+    ctx: BotTextContext,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'RENAME_FAMILY_WIZARD') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancelé el cambio de nombre de la familia.';
+    }
+
+    if (!text) {
+      throw new BadRequestException(
+        'Escribe un nombre válido para la familia.',
+      );
+    }
+
+    const user = await this.requireRegisteredUser(ctx);
+    const family = await this.usersService.renameFamily(user.id, text);
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+    const members = await this.usersService.listManagedUsers(user.id);
+    return {
+      text: `Listo. La familia ahora se llama "${family.name}".`,
+      extra: this.buildFamilyManagementKeyboard(members),
+    };
   }
 
   private async startBulkTaskAction(
@@ -2624,6 +2681,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     members: { id: string; name: string }[],
   ) {
     const rows = [
+      [
+        Markup.button.callback(
+          '✏️ Renombrar familia',
+          CALLBACK_FAMILY_RENAME,
+        ),
+      ],
       [
         Markup.button.callback(
           '🆕 Agregar miembro',
