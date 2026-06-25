@@ -52,6 +52,34 @@ type BotContactContext = BotReplyContext & {
   };
 };
 
+type DisplayTask = {
+  title: string;
+  dueDate: Date | null;
+  scope: TaskScope;
+  priority?: Priority;
+};
+
+type BotCallbackContext = BotReplyContext & {
+  answerCbQuery: (text?: string) => Promise<unknown>;
+  editMessageReplyMarkup: (markup?: unknown) => Promise<unknown>;
+  editMessageText: (text: string, extra?: unknown) => Promise<unknown>;
+};
+
+type BotResponse =
+  | string
+  | {
+      text: string;
+      extra?: unknown;
+    };
+
+type BulkCallbackResult = {
+  answerText?: string;
+  editText?: string;
+  editExtra?: unknown;
+  clearMarkup?: boolean;
+  reply?: BotResponse;
+};
+
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 const MENU_NEW_TASK = '➕ Nueva tarea';
 const MENU_TODAY = '📆 Hoy';
@@ -67,6 +95,19 @@ const WIZARD_PRIORITY_HIGH = 'Alta';
 const WIZARD_PRIORITY_MEDIUM = 'Media';
 const WIZARD_PRIORITY_LOW = 'Baja';
 const WIZARD_CONFIRM_CREATE = 'Crear tarea';
+const CALLBACK_WIZARD_SCOPE_PERSONAL = 'wizard:scope:personal';
+const CALLBACK_WIZARD_SCOPE_FAMILY = 'wizard:scope:family';
+const CALLBACK_WIZARD_DUE_NONE = 'wizard:due:none';
+const CALLBACK_WIZARD_CANCEL = 'wizard:cancel';
+const CALLBACK_WIZARD_PRIORITY_HIGH = 'wizard:priority:high';
+const CALLBACK_WIZARD_PRIORITY_MEDIUM = 'wizard:priority:medium';
+const CALLBACK_WIZARD_PRIORITY_LOW = 'wizard:priority:low';
+const CALLBACK_WIZARD_CONFIRM = 'wizard:confirm';
+const CALLBACK_BULK_START_COMPLETE = 'bulk:start:complete';
+const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
+const CALLBACK_BULK_CANCEL = 'bulk:cancel';
+const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
+const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -210,6 +251,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.safeReply(typedCtx, this.handleContact(typedCtx));
     });
 
+    this.bot.action(/^wizard:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleWizardCallback(typedCtx);
+    });
+
+    this.bot.action(/^bulk:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleBulkCallback(typedCtx);
+    });
+
     this.bot.on(message('text'), async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       const text = typedCtx.message.text.trim();
@@ -329,7 +384,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Usuario ${createdUser.name} creado en la familia. Debe escribir /start y compartir su contacto para vincularse.`;
   }
 
-  private async startTaskWizard(ctx: BotReplyContext) {
+  private async startTaskWizard(ctx: BotReplyContext): Promise<BotResponse> {
     await this.requireRegisteredUser(ctx);
     await this.tasksService.setPendingAction(String(ctx.chat.id), {
       type: 'CREATE_TASK_WIZARD',
@@ -337,51 +392,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       draft: {},
     });
 
-    return 'Nueva tarea. Escribe el titulo.\n\nEjemplo: Comprar remedios para mi mama.\n\nPuedes responder "Cancelar" en cualquier paso.';
+    return {
+      text: 'Vamos a crear una tarea.\n\nPrimero, escribe el titulo.\nEjemplo: Comprar remedios para mi mama.\n\nPuedes responder "Cancelar" en cualquier paso.',
+    };
   }
 
   private async handleListToday(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listTodayTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList(
-      'Tareas para hoy',
-      tasks,
-      this.usersService.resolveTimezone(user),
-    );
+    return this.buildTaskListResponse('today', tasks, true, true);
   }
 
   private async handleListPending(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listPendingTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList(
-      'Tareas pendientes',
-      tasks,
-      this.usersService.resolveTimezone(user),
-    );
+    return this.buildTaskListResponse('pending', tasks, true, true);
   }
 
   private async handleListFamily(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listFamilyTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList(
-      'Tareas familiares',
-      tasks,
-      this.usersService.resolveTimezone(user),
-    );
+    return this.buildTaskListResponse('family', tasks, true, true);
   }
 
   private async handleListCompleted(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listCompletedTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList(
-      'Tareas completadas',
-      tasks,
-      this.usersService.resolveTimezone(user),
-    );
+    return this.buildTaskListResponse('completed', tasks, false, false);
   }
 
   private async handleComplete(ctx: BotTextContext) {
@@ -393,7 +434,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       index,
     );
 
-    return `Tarea completada: ${task.title}`;
+    return `Listo. Marque "${task.title}" como completada.`;
   }
 
   private async handleDelete(ctx: BotTextContext) {
@@ -405,7 +446,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       index,
     );
 
-    return `Tarea cancelada: ${task.title}`;
+    return `Elimine "${task.title}" de tu lista.`;
   }
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
@@ -458,7 +499,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           String(ctx.chat.id),
           interpretation.taskIndex,
         );
-        return `Tarea ${interpretation.taskIndex} completada.`;
+        return `Listo. Marque la tarea ${interpretation.taskIndex} como completada.`;
       case 'DELETE_TASK':
         if (!interpretation.taskIndex) {
           throw new BadRequestException(
@@ -470,7 +511,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           String(ctx.chat.id),
           interpretation.taskIndex,
         );
-        return `Tarea ${interpretation.taskIndex} cancelada.`;
+        return `Elimine la tarea ${interpretation.taskIndex} de tu lista.`;
       case 'HELP':
         return this.helpMessage;
       case 'CREATE_TASK': {
@@ -497,7 +538,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             reason: 'AMBIGUOUS_DATE',
             dto,
           });
-          return `Eso parece una tarea, pero no pude resolver bien la fecha o el detalle. Entendi esto como "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
+          return `Eso suena a tarea, pero no pude resolver bien la fecha o el detalle. Entendi "${dto.title}". ¿Quieres que la deje creada sin fecha? Responde si o no.`;
         }
 
         return 'No pude interpretar esa solicitud. Usa /ayuda para ver ejemplos.';
@@ -516,44 +557,111 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return user;
   }
 
+  private buildTaskListResponse(
+    listType: 'today' | 'pending' | 'family' | 'completed',
+    tasks: DisplayTask[],
+    allowBulkComplete: boolean,
+    allowBulkDelete: boolean,
+  ): BotResponse {
+    const text = this.formatTaskList(listType, tasks);
+    const buttons = [];
+
+    if (tasks.length > 0 && allowBulkComplete) {
+      buttons.push(
+        Markup.button.callback(
+          '✅ Completar varias',
+          CALLBACK_BULK_START_COMPLETE,
+        ),
+      );
+    }
+
+    if (tasks.length > 0 && allowBulkDelete) {
+      buttons.push(
+        Markup.button.callback(
+          '🗑️ Eliminar varias',
+          CALLBACK_BULK_START_DELETE,
+        ),
+      );
+    }
+
+    if (buttons.length === 0) {
+      return text;
+    }
+
+    return {
+      text,
+      extra: Markup.inlineKeyboard([buttons]),
+    };
+  }
+
   private formatTaskList(
-    title: string,
-    tasks: {
-      title: string;
-      dueDate: Date | null;
-      scope: TaskScope;
-      priority?: Priority;
-    }[],
+    listType: 'today' | 'pending' | 'family' | 'completed',
+    tasks: DisplayTask[],
     timezone = this.configService.get<string>(
       'DEFAULT_TIMEZONE',
       'America/Santiago',
     ),
   ) {
+    const headings: Record<typeof listType, string> = {
+      today: 'Esto tienes para hoy',
+      pending: 'Estas son tus tareas pendientes',
+      family: 'Estas son las tareas familiares pendientes',
+      completed: 'Estas son las tareas completadas',
+    };
+
     if (tasks.length === 0) {
-      return `${title}\n\nNo hay tareas.`;
+      return `${headings[listType]}\n\nNo hay nada por aqui.`;
     }
 
-    const lines = tasks.map((task, index) => {
-      const due = task.dueDate
-        ? ` - vence ${DateTime.fromJSDate(task.dueDate).setZone(timezone).toFormat('yyyy-LL-dd HH:mm')}`
-        : '';
-      const scope = task.scope === TaskScope.FAMILY ? ' [FAMILIAR]' : '';
-      const priorityEmoji = task.priority === Priority.HIGH ? ' 🔴' : '';
-      const priority =
-        task.priority && task.priority !== Priority.MEDIUM
-          ? ` [${task.priority}]`
-          : '';
-      return `${index + 1}. ${task.title}${scope}${priority}${priorityEmoji}${due}`;
+    if (listType === 'today' || listType === 'completed') {
+      const lines = tasks.map(
+        (task, index) =>
+          `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`,
+      );
+      return `${headings[listType]}\n\n${lines.join('\n')}`;
+    }
+
+    const now = DateTime.now().setZone(timezone);
+    const today: string[] = [];
+    const upcoming: string[] = [];
+    const noDate: string[] = [];
+
+    tasks.forEach((task, index) => {
+      const line = `${index + 1}. ${this.formatTaskLine(task, timezone, true)}`;
+      if (!task.dueDate) {
+        noDate.push(line);
+        return;
+      }
+
+      const due = DateTime.fromJSDate(task.dueDate).setZone(timezone);
+      if (due.hasSame(now, 'day')) {
+        today.push(line);
+        return;
+      }
+
+      upcoming.push(line);
     });
 
-    return `${title}\n\n${lines.join('\n')}`;
+    const sections = [headings[listType]];
+    if (today.length > 0) {
+      sections.push(`Vencen hoy\n${today.join('\n')}`);
+    }
+    if (upcoming.length > 0) {
+      sections.push(`Proximas\n${upcoming.join('\n')}`);
+    }
+    if (noDate.length > 0) {
+      sections.push(`Sin fecha\n${noDate.join('\n')}`);
+    }
+
+    return sections.join('\n\n');
   }
 
-  private async safeReply(ctx: BotReplyContext, handler: Promise<string>) {
+  private async safeReply(ctx: BotReplyContext, handler: Promise<BotResponse>) {
     try {
       const reply = await handler;
-      const extra = await this.getDefaultReplyMarkup(ctx);
-      await ctx.reply(reply, extra);
+      const payload = this.normalizeBotResponse(reply);
+      const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+      await ctx.reply(payload.text, payload.extra ?? defaultExtra);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
@@ -561,6 +669,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const extra = await this.getDefaultReplyMarkup(ctx);
       await ctx.reply(message, extra);
     }
+  }
+
+  private normalizeBotResponse(reply: BotResponse) {
+    if (typeof reply === 'string') {
+      return { text: reply, extra: undefined };
+    }
+
+    return reply;
   }
 
   private normalizeDueDate(dueDate?: string | null) {
@@ -624,7 +740,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     await this.tasksService.clearPendingAction(String(ctx.chat.id));
 
     if (text === 'no' || text === 'cancelar') {
-      return 'Operacion cancelada.';
+      return 'Listo, no hice ningun cambio.';
     }
 
     const task = await this.tasksService.createTaskForUser(
@@ -633,10 +749,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (pendingAction.reason === 'AMBIGUOUS_DATE') {
-      return `Tarea creada sin fecha: ${task.title}`;
+      return `Listo. Agregue "${task.title}" sin fecha. Puedes verla en Pendientes.`;
     }
 
-    return `Tarea duplicada creada: ${task.title}`;
+    return `Listo. Cree otra tarea igual: "${task.title}".`;
   }
 
   private async tryHandleMenuAction(ctx: BotTextContext) {
@@ -660,7 +776,282 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async safeHandleWizardCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const reply = await this.handleWizardCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
+      await ctx.answerCbQuery();
+      await ctx.editMessageReplyMarkup(undefined);
+
+      if (!reply) {
+        return;
+      }
+
+      const payload = this.normalizeBotResponse(reply);
+      const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+      await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
+  private async safeHandleBulkCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const result = await this.handleBulkCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
+      await ctx.answerCbQuery(result.answerText);
+
+      if (result.editText) {
+        await ctx.editMessageText(result.editText, result.editExtra);
+      } else if (result.clearMarkup) {
+        await ctx.editMessageReplyMarkup(undefined);
+      }
+
+      if (result.reply) {
+        const payload = this.normalizeBotResponse(result.reply);
+        const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
+  private async handleWizardCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BotResponse | null> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    switch (data) {
+      case CALLBACK_WIZARD_CANCEL:
+        await this.tasksService.clearPendingAction(String(ctx.chat.id));
+        return 'Listo, cancele la creacion de la tarea.';
+      case CALLBACK_WIZARD_SCOPE_PERSONAL:
+        return this.handleWizardInput(ctx, user.id, WIZARD_SCOPE_PERSONAL);
+      case CALLBACK_WIZARD_SCOPE_FAMILY:
+        return this.handleWizardInput(ctx, user.id, WIZARD_SCOPE_FAMILY);
+      case CALLBACK_WIZARD_DUE_NONE:
+        return this.handleWizardInput(ctx, user.id, WIZARD_DUE_NONE);
+      case CALLBACK_WIZARD_PRIORITY_HIGH:
+        return this.handleWizardInput(ctx, user.id, WIZARD_PRIORITY_HIGH);
+      case CALLBACK_WIZARD_PRIORITY_MEDIUM:
+        return this.handleWizardInput(ctx, user.id, WIZARD_PRIORITY_MEDIUM);
+      case CALLBACK_WIZARD_PRIORITY_LOW:
+        return this.handleWizardInput(ctx, user.id, WIZARD_PRIORITY_LOW);
+      case CALLBACK_WIZARD_CONFIRM:
+        return this.handleWizardInput(ctx, user.id, WIZARD_CONFIRM_CREATE);
+      default:
+        return null;
+    }
+  }
+
+  private async handleBulkCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BulkCallbackResult> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    if (data === CALLBACK_BULK_START_COMPLETE) {
+      return this.startBulkTaskAction(ctx, 'COMPLETE');
+    }
+
+    if (data === CALLBACK_BULK_START_DELETE) {
+      return this.startBulkTaskAction(ctx, 'DELETE');
+    }
+
+    if (data === CALLBACK_BULK_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Cancelado',
+        clearMarkup: true,
+        reply: 'Listo, cancele la seleccion multiple.',
+      };
+    }
+
+    if (data.startsWith('bulk:toggle:')) {
+      const [, , mode, indexText] = data.split(':');
+      return this.toggleBulkTaskSelection(
+        ctx,
+        mode === 'delete' ? 'DELETE' : 'COMPLETE',
+        Number(indexText),
+      );
+    }
+
+    if (data === CALLBACK_BULK_CONFIRM_COMPLETE) {
+      return this.confirmBulkTaskAction(ctx, user.id, 'COMPLETE');
+    }
+
+    if (data === CALLBACK_BULK_CONFIRM_DELETE) {
+      return this.confirmBulkTaskAction(ctx, user.id, 'DELETE');
+    }
+
+    return {
+      answerText: undefined,
+      clearMarkup: false,
+    };
+  }
+
+  private async startBulkTaskAction(
+    ctx: BotReplyContext,
+    mode: 'COMPLETE' | 'DELETE',
+  ) {
+    const tasks = await this.tasksService.getTasksFromContext(
+      String(ctx.chat.id),
+    );
+    if (tasks.length === 0) {
+      throw new BadRequestException(
+        'No hay una lista reciente con tareas para seleccionar.',
+      );
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'BULK_TASK_ACTION_WIZARD',
+      mode,
+      taskIds: tasks.map((task) => task.id),
+      selectedTaskIds: [],
+    });
+
+    return {
+      answerText: undefined,
+      editText: this.formatBulkSelectionPrompt(mode, tasks, []),
+      editExtra: this.buildBulkSelectionKeyboard(mode, tasks, []),
+    };
+  }
+
+  private async toggleBulkTaskSelection(
+    ctx: BotReplyContext,
+    mode: 'COMPLETE' | 'DELETE',
+    index: number,
+  ) {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'BULK_TASK_ACTION_WIZARD') {
+      throw new BadRequestException('No hay una seleccion multiple activa.');
+    }
+
+    const tasks = await this.tasksService.getTasksFromContext(
+      String(ctx.chat.id),
+    );
+    const task = tasks[index - 1];
+    if (!task) {
+      throw new BadRequestException('Ese indice no existe en la lista actual.');
+    }
+
+    const selectedTaskIds = pendingAction.selectedTaskIds.includes(task.id)
+      ? pendingAction.selectedTaskIds.filter((taskId) => taskId !== task.id)
+      : [...pendingAction.selectedTaskIds, task.id];
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'BULK_TASK_ACTION_WIZARD',
+      mode,
+      taskIds: pendingAction.taskIds,
+      selectedTaskIds,
+    });
+
+    return {
+      answerText: selectedTaskIds.includes(task.id)
+        ? 'Seleccionada'
+        : 'Quitada',
+      editText: this.formatBulkSelectionPrompt(mode, tasks, selectedTaskIds),
+      editExtra: this.buildBulkSelectionKeyboard(mode, tasks, selectedTaskIds),
+    };
+  }
+
+  private async confirmBulkTaskAction(
+    ctx: BotReplyContext,
+    userId: string,
+    mode: 'COMPLETE' | 'DELETE',
+  ) {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'BULK_TASK_ACTION_WIZARD') {
+      throw new BadRequestException('No hay una seleccion multiple activa.');
+    }
+
+    if (pendingAction.selectedTaskIds.length === 0) {
+      throw new BadRequestException('Selecciona al menos una tarea primero.');
+    }
+
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+    const tasks =
+      mode === 'COMPLETE'
+        ? await this.tasksService.completeTasksByIds(
+            userId,
+            pendingAction.selectedTaskIds,
+          )
+        : await this.tasksService.deleteTasksByIds(
+            userId,
+            pendingAction.selectedTaskIds,
+          );
+
+    const reply =
+      mode === 'COMPLETE'
+        ? `Listo. Marque ${tasks.length} tarea${tasks.length === 1 ? '' : 's'} como completada${tasks.length === 1 ? '' : 's'}.`
+        : `Listo. Elimine ${tasks.length} tarea${tasks.length === 1 ? '' : 's'} de tu lista.`;
+
+    return {
+      answerText: 'Hecho',
+      clearMarkup: true,
+      reply,
+    };
+  }
+
   private async tryHandleTaskWizard(ctx: BotTextContext, userId: string) {
+    return this.handleWizardInput(ctx, userId, ctx.message.text.trim());
+  }
+
+  private async handleWizardInput(
+    ctx: BotReplyContext,
+    userId: string,
+    rawText: string,
+  ): Promise<BotResponse | null> {
     const pendingAction = await this.tasksService.getPendingAction(
       String(ctx.chat.id),
     );
@@ -668,12 +1059,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
-    const text = ctx.message.text.trim();
+    const text = rawText.trim();
     const lowered = text.toLowerCase();
 
     if (lowered === 'cancelar' || text === MENU_CANCEL) {
       await this.tasksService.clearPendingAction(String(ctx.chat.id));
-      return 'Creacion de tarea cancelada.';
+      return 'Listo, cancele la creacion de la tarea.';
     }
 
     switch (pendingAction.step) {
@@ -686,7 +1077,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             title: text,
           },
         });
-        return '¿La tarea es personal o familiar?';
+        return {
+          text: '¿La tarea es personal o familiar?',
+          extra: this.wizardScopeInlineKeyboard,
+        };
       case 'SCOPE': {
         const scope = this.parseWizardScope(text);
         if (!scope) {
@@ -701,7 +1095,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             scope,
           },
         });
-        return '¿Para cuando es? Escribe una fecha natural como "manana 18:00", "el viernes en la tarde" o responde "Sin fecha".';
+        return {
+          text: '¿Para cuando es? Escribe una fecha natural como "manana 18:00" o "el viernes en la tarde". Si prefieres, usa el boton "Sin fecha".',
+          extra: this.wizardDueDateInlineKeyboard,
+        };
       }
       case 'DUE_DATE': {
         const dueDate = await this.resolveWizardDueDate(text, userId);
@@ -714,7 +1111,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             dueDateInput: text,
           },
         });
-        return '¿Que prioridad tiene? Responde "Alta", "Media" o "Baja".';
+        return {
+          text: '¿Que prioridad tiene?',
+          extra: this.wizardPriorityInlineKeyboard,
+        };
       }
       case 'PRIORITY': {
         const priority = this.parseWizardPriority(text);
@@ -731,7 +1131,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           step: 'CONFIRM',
           draft,
         });
-        return this.formatTaskDraftSummary(draft);
+        return {
+          text: this.formatTaskDraftSummary(draft),
+          extra: this.wizardConfirmInlineKeyboard,
+        };
       }
       case 'CONFIRM':
         if (
@@ -777,7 +1180,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         reason: 'AMBIGUOUS_DATE',
         dto,
       });
-      return `No pude determinar una fecha exacta para "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
+      return `No pude fijar una fecha exacta para "${dto.title}". Si quieres, la dejo creada sin fecha. Responde si o no.`;
     }
 
     const duplicateTask = await this.tasksService.findObviousDuplicateTask(
@@ -791,11 +1194,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         dto,
         duplicateTaskTitle: duplicateTask.title,
       });
-      return `Ya existe una tarea pendiente muy parecida: "${duplicateTask.title}". ¿Quieres crear otra igual? Responde si o no.`;
+      return `Ya tienes una tarea muy parecida: "${duplicateTask.title}". Si aun asi quieres otra, responde si.`;
     }
 
     const task = await this.tasksService.createTaskForUser(userId, dto);
-    return `Tarea creada: ${task.title}`;
+    const user = await this.usersService.requireActiveUser(userId);
+    return `Listo. Agregue ${this.formatTaskCreatedSummary(
+      task,
+      this.usersService.resolveTimezone(user),
+    )}`;
   }
 
   private async resolveWizardDueDate(text: string, userId: string) {
@@ -872,12 +1279,117 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           : 'Media';
 
     return [
-      'Resumen de la tarea',
+      'Asi quedaria la tarea',
       `Titulo: ${draft.title ?? '-'}`,
       `Tipo: ${scope}`,
       `Vence: ${dueDate}`,
       `Prioridad: ${priority}`,
+      '',
+      'Responde "Crear tarea" o "si" para confirmarla.',
     ].join('\n');
+  }
+
+  private formatTaskLine(
+    task: DisplayTask,
+    timezone: string,
+    relativeDate: boolean,
+  ) {
+    const badges = [
+      task.priority === Priority.HIGH ? '🔴' : '',
+      task.scope === TaskScope.FAMILY ? 'Familiar' : 'Personal',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    const due = task.dueDate
+      ? relativeDate
+        ? this.formatDueLabel(task.dueDate, timezone)
+        : `para ${DateTime.fromJSDate(task.dueDate).setZone(timezone).toFormat('HH:mm')}`
+      : 'sin fecha';
+
+    return `${task.title} · ${badges} · ${due}`;
+  }
+
+  private formatDueLabel(dueDate: Date, timezone: string) {
+    const due = DateTime.fromJSDate(dueDate).setZone(timezone);
+    const now = DateTime.now().setZone(timezone);
+
+    if (due.hasSame(now, 'day')) {
+      return `hoy a las ${due.toFormat('HH:mm')}`;
+    }
+
+    if (due.hasSame(now.plus({ days: 1 }), 'day')) {
+      return `manana a las ${due.toFormat('HH:mm')}`;
+    }
+
+    return due.toFormat("'el' cccc dd/LL 'a las' HH:mm");
+  }
+
+  private formatTaskCreatedSummary(task: DisplayTask, timezone: string) {
+    const scope =
+      task.scope === TaskScope.FAMILY
+        ? 'como tarea familiar'
+        : 'como tarea personal';
+    const due = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+    const priority =
+      task.priority === Priority.HIGH ? ' con prioridad alta 🔴' : '';
+    return `"${task.title}" ${scope}, ${due}${priority}.`;
+  }
+
+  private formatBulkSelectionPrompt(
+    mode: 'COMPLETE' | 'DELETE',
+    tasks: (DisplayTask & { id: string })[],
+    selectedTaskIds: string[],
+  ) {
+    const actionLabel = mode === 'COMPLETE' ? 'completar' : 'eliminar';
+    const selectedCount = selectedTaskIds.length;
+    const lines = tasks.map((task, index) => {
+      const marker = selectedTaskIds.includes(task.id) ? '✅' : '☐';
+      return `${marker} ${index + 1}. ${this.truncateTaskTitle(task.title)}`;
+    });
+
+    return [
+      `Selecciona las tareas que quieres ${actionLabel}.`,
+      selectedCount > 0
+        ? `Llevas ${selectedCount} seleccionada${selectedCount === 1 ? '' : 's'}.`
+        : 'Aun no has seleccionado ninguna.',
+      '',
+      lines.join('\n'),
+    ].join('\n');
+  }
+
+  private buildBulkSelectionKeyboard(
+    mode: 'COMPLETE' | 'DELETE',
+    tasks: (DisplayTask & { id: string })[],
+    selectedTaskIds: string[],
+  ) {
+    const rows = tasks.map((task, index) => {
+      const selected = selectedTaskIds.includes(task.id);
+      const label = `${selected ? '✅' : '☐'} ${index + 1}. ${this.truncateTaskTitle(task.title, 18)}`;
+      const callback = `bulk:toggle:${mode.toLowerCase()}:${index + 1}`;
+      return [Markup.button.callback(label, callback)];
+    });
+
+    rows.push([
+      Markup.button.callback(
+        mode === 'COMPLETE' ? '✅ Confirmar' : '🗑️ Confirmar',
+        mode === 'COMPLETE'
+          ? CALLBACK_BULK_CONFIRM_COMPLETE
+          : CALLBACK_BULK_CONFIRM_DELETE,
+      ),
+    ]);
+    rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_BULK_CANCEL)]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private truncateTaskTitle(title: string, maxLength = 28) {
+    if (title.length <= maxLength) {
+      return title;
+    }
+
+    return `${title.slice(0, maxLength - 1)}…`;
   }
 
   private async getDefaultReplyMarkup(ctx: BotReplyContext) {
@@ -886,24 +1398,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     );
     if (!user) {
       return undefined;
-    }
-
-    const pendingAction = await this.tasksService.getPendingAction(
-      String(ctx.chat.id),
-    );
-    if (pendingAction?.type === 'CREATE_TASK_WIZARD') {
-      switch (pendingAction.step) {
-        case 'SCOPE':
-          return this.wizardScopeKeyboard;
-        case 'DUE_DATE':
-          return this.wizardDueDateKeyboard;
-        case 'PRIORITY':
-          return this.wizardPriorityKeyboard;
-        case 'CONFIRM':
-          return this.wizardConfirmKeyboard;
-        default:
-          break;
-      }
     }
 
     return this.mainMenuKeyboard;
@@ -917,34 +1411,54 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]).resize();
   }
 
-  private get wizardScopeKeyboard() {
-    return Markup.keyboard([
-      [WIZARD_SCOPE_PERSONAL, WIZARD_SCOPE_FAMILY],
-      [MENU_CANCEL],
-    ])
-      .oneTime()
-      .resize();
+  private get wizardScopeInlineKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          WIZARD_SCOPE_PERSONAL,
+          CALLBACK_WIZARD_SCOPE_PERSONAL,
+        ),
+        Markup.button.callback(
+          WIZARD_SCOPE_FAMILY,
+          CALLBACK_WIZARD_SCOPE_FAMILY,
+        ),
+      ],
+      [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
+    ]);
   }
 
-  private get wizardDueDateKeyboard() {
-    return Markup.keyboard([[WIZARD_DUE_NONE], [MENU_CANCEL]])
-      .oneTime()
-      .resize();
+  private get wizardDueDateInlineKeyboard() {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(WIZARD_DUE_NONE, CALLBACK_WIZARD_DUE_NONE)],
+      [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
+    ]);
   }
 
-  private get wizardPriorityKeyboard() {
-    return Markup.keyboard([
-      [WIZARD_PRIORITY_HIGH, WIZARD_PRIORITY_MEDIUM, WIZARD_PRIORITY_LOW],
-      [MENU_CANCEL],
-    ])
-      .oneTime()
-      .resize();
+  private get wizardPriorityInlineKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          WIZARD_PRIORITY_HIGH,
+          CALLBACK_WIZARD_PRIORITY_HIGH,
+        ),
+        Markup.button.callback(
+          WIZARD_PRIORITY_MEDIUM,
+          CALLBACK_WIZARD_PRIORITY_MEDIUM,
+        ),
+        Markup.button.callback(
+          WIZARD_PRIORITY_LOW,
+          CALLBACK_WIZARD_PRIORITY_LOW,
+        ),
+      ],
+      [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
+    ]);
   }
 
-  private get wizardConfirmKeyboard() {
-    return Markup.keyboard([[WIZARD_CONFIRM_CREATE], [MENU_CANCEL]])
-      .oneTime()
-      .resize();
+  private get wizardConfirmInlineKeyboard() {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(WIZARD_CONFIRM_CREATE, CALLBACK_WIZARD_CONFIRM)],
+      [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
+    ]);
   }
 
   private async syncBotCommands() {

@@ -35,6 +35,12 @@ type PendingAction =
         dueDateInput?: string | null;
         priority?: Priority;
       };
+    }
+  | {
+      type: 'BULK_TASK_ACTION_WIZARD';
+      mode: 'COMPLETE' | 'DELETE';
+      taskIds: string[];
+      selectedTaskIds: string[];
     };
 
 @Injectable()
@@ -247,6 +253,63 @@ export class TasksService {
     });
   }
 
+  async getTasksFromContext(chatId: string) {
+    const taskIds = await this.getTaskIdsFromContext(chatId);
+    if (taskIds.length === 0) {
+      return [];
+    }
+
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds } },
+    });
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    return taskIds
+      .map((taskId) => taskById.get(taskId))
+      .filter((task): task is Task => Boolean(task));
+  }
+
+  async completeTasksByIds(userId: string, taskIds: string[]) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds } },
+    });
+
+    if (tasks.length !== taskIds.length) {
+      throw new BadRequestException('Algunas tareas ya no existen.');
+    }
+
+    tasks.forEach((task) => this.assertCanCompleteTask(user, task));
+
+    await this.prisma.task.updateMany({
+      where: { id: { in: taskIds } },
+      data: {
+        status: TaskStatus.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
+
+    return tasks;
+  }
+
+  async deleteTasksByIds(userId: string, taskIds: string[]) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const tasks = await this.prisma.task.findMany({
+      where: { id: { in: taskIds } },
+    });
+
+    if (tasks.length !== taskIds.length) {
+      throw new BadRequestException('Algunas tareas ya no existen.');
+    }
+
+    tasks.forEach((task) => this.assertCanDeleteTask(user, task));
+
+    await this.prisma.task.deleteMany({
+      where: { id: { in: taskIds } },
+    });
+
+    return tasks;
+  }
+
   async getTasksDueForReminder(reminderMinutesBefore: number) {
     const now = new Date();
     const limit = DateTime.now()
@@ -293,17 +356,7 @@ export class TasksService {
       );
     }
 
-    const context = await this.prisma.chatContext.findUnique({
-      where: { chatId },
-    });
-
-    if (!context) {
-      throw new BadRequestException(
-        'No hay una lista reciente. Usa /pendientes, /hoy o /familiares primero.',
-      );
-    }
-
-    const taskIds = JSON.parse(context.taskIdsJson) as string[];
+    const taskIds = await this.getTaskIdsFromContext(chatId);
     const taskId = taskIds[index - 1];
 
     if (!taskId) {
@@ -316,6 +369,20 @@ export class TasksService {
     }
 
     return task;
+  }
+
+  private async getTaskIdsFromContext(chatId: string) {
+    const context = await this.prisma.chatContext.findUnique({
+      where: { chatId },
+    });
+
+    if (!context) {
+      throw new BadRequestException(
+        'No hay una lista reciente. Usa /pendientes, /hoy o /familiares primero.',
+      );
+    }
+
+    return JSON.parse(context.taskIdsJson) as string[];
   }
 
   private assertCanCompleteTask(user: ActiveUser, task: Task) {
