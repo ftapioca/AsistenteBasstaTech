@@ -53,16 +53,8 @@ type PendingAction =
       type: 'EDIT_TASK_SELECTION';
     }
   | {
-      type: 'EDIT_TASK_WIZARD';
-      step: 'DUE_DATE' | 'CONFIRM';
-      taskId: string;
-      draft: {
-        dueDate?: string | null;
-        dueDateInput?: string | null;
-      };
-    }
-  | {
-      type: 'TASK_NOTE_WIZARD';
+      type: 'EDIT_TASK_INPUT';
+      field: 'TITLE' | 'DUE_DATE' | 'NOTE';
       taskId: string;
     };
 
@@ -290,6 +282,20 @@ export class TasksService {
     return task;
   }
 
+  async getEditableTaskById(userId: string, taskId: string) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    const user = await this.usersService.requireActiveUser(userId);
+    this.assertCanEditTask(user, task);
+    return task;
+  }
+
   async updateTaskDueDate(userId: string, taskId: string, dueDate: string | null) {
     const user = await this.usersService.requireActiveUser(userId);
     const task = await this.prisma.task.findUnique({
@@ -307,6 +313,26 @@ export class TasksService {
       data: {
         dueDate: dueDate ? new Date(dueDate) : null,
         reminderSent: false,
+      },
+    });
+  }
+
+  async updateTaskTitle(userId: string, taskId: string, title: string) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        title,
       },
     });
   }

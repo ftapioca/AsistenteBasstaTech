@@ -104,6 +104,8 @@ const CALLBACK_WIZARD_PRIORITY_MEDIUM = 'wizard:priority:medium';
 const CALLBACK_WIZARD_PRIORITY_LOW = 'wizard:priority:low';
 const CALLBACK_WIZARD_CONFIRM = 'wizard:confirm';
 const CALLBACK_BULK_START_COMPLETE = 'bulk:start:complete';
+const CALLBACK_EDIT_START = 'edit:start';
+const CALLBACK_EDIT_CANCEL = 'edit:cancel';
 const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
 const CALLBACK_BULK_CANCEL = 'bulk:cancel';
 const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
@@ -280,6 +282,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         callbackQuery: { data?: string };
       };
       await this.safeHandleBulkCallback(typedCtx);
+    });
+
+    this.bot.action(/^edit:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleEditCallback(typedCtx);
     });
 
     this.bot.action(/^family:/, async (ctx) => {
@@ -496,17 +505,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         type: 'EDIT_TASK_SELECTION',
       });
 
-      return [
-        '¿Que tarea quieres editar?',
-        '',
-        this.formatTaskList(
-          'pending',
+      return {
+        text: this.formatEditSelectionPrompt(
           tasks,
           this.usersService.resolveTimezone(user),
         ),
-        '',
-        'Responde solo con el numero de la tarea. Ejemplo: 2',
-      ].join('\n');
+        extra: this.buildEditSelectionKeyboard(tasks),
+      };
     }
 
     const index = this.parseCommandIndex(
@@ -520,32 +525,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       index,
     );
 
-    await this.tasksService.setPendingAction(String(ctx.chat.id), {
-      type: 'EDIT_TASK_WIZARD',
-      step: 'DUE_DATE',
-      taskId: task.id,
-      draft: {},
-    });
-
-    const timezone = this.usersService.resolveTimezone(user);
-    const currentDue = task.dueDate
-      ? this.formatDueLabel(task.dueDate, timezone)
-      : 'sin fecha';
-    const overdue =
-      task.dueDate &&
-      DateTime.fromJSDate(task.dueDate).setZone(timezone) <
-        DateTime.now().setZone(timezone)
-        ? '\n\nEsta tarea ya esta vencida.'
-        : '';
-
-    return [
-      `Vamos a editar "${task.title}".`,
-      `Vencimiento actual: ${currentDue}.${overdue}`,
-      '',
-      'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
-      'Si quieres quitar el vencimiento, responde "Sin fecha".',
-      'Si prefieres salir, responde "Cancelar".',
-    ].join('\n');
+    return {
+      text: this.formatEditTaskMenu(
+        task,
+        this.usersService.resolveTimezone(user),
+      ),
+      extra: this.buildEditTaskKeyboard(task),
+    };
   }
 
   private async handleViewTask(ctx: BotTextContext) {
@@ -598,18 +584,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.tasksService.setPendingAction(String(ctx.chat.id), {
-      type: 'TASK_NOTE_WIZARD',
+      type: 'EDIT_TASK_INPUT',
+      field: 'NOTE',
       taskId: task.id,
     });
 
-    return [
-      `Vamos a editar la nota de "${task.title}".`,
-      task.description ? `Nota actual:\n${task.description}` : 'Actualmente no tiene nota.',
-      '',
-      'Escribe la nueva nota. Puede tener varias lineas.',
-      'Si quieres borrar la nota, responde "Borrar".',
-      'Si prefieres salir, responde "Cancelar".',
-    ].join('\n');
+    return {
+      text: [
+        `Editar nota de "${task.title}"`,
+        '',
+        task.description?.trim()
+          ? `Nota actual:\n${task.description}`
+          : 'Actualmente no tiene nota.',
+        '',
+        'Escribe la nueva nota. Puede tener varias lineas.',
+        'Si quieres borrar la nota, usa el boton correspondiente o responde "Borrar".',
+        'Si prefieres salir, responde "Cancelar".',
+      ].join('\n'),
+      extra: this.buildEditNoteKeyboard(task),
+    };
   }
 
   private async handleFamilyManagement(ctx: BotTextContext) {
@@ -654,14 +647,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return editSelectionReply;
     }
 
-    const editReply = await this.tryHandleEditTaskWizard(ctx, user.id);
+    const editReply = await this.tryHandleEditTaskInput(ctx, user.id);
     if (editReply) {
       return editReply;
-    }
-
-    const noteReply = await this.tryHandleTaskNoteWizard(ctx, user.id);
-    if (noteReply) {
-      return noteReply;
     }
 
     const confirmationReply = await this.tryHandlePendingConfirmation(
@@ -775,6 +763,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '✅ Completar varias',
           CALLBACK_BULK_START_COMPLETE,
         ),
+      );
+    }
+
+    if (tasks.length > 0) {
+      buttons.push(
+        Markup.button.callback('✏️ Editar', CALLBACK_EDIT_START),
       );
     }
 
@@ -1053,6 +1047,44 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async safeHandleEditCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const result = await this.handleEditCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
+      await ctx.answerCbQuery(result.answerText);
+
+      if (result.editText) {
+        await ctx.editMessageText(result.editText, result.editExtra);
+      } else if (result.clearMarkup) {
+        await ctx.editMessageReplyMarkup(undefined);
+      }
+
+      if (result.reply) {
+        const payload = this.normalizeBotResponse(result.reply);
+        const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
   private async safeHandleFamilyCallback(
     ctx: BotCallbackContext & {
       callbackQuery: { data?: string };
@@ -1170,6 +1202,218 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data === CALLBACK_BULK_CONFIRM_DELETE) {
       return this.confirmBulkTaskAction(ctx, user.id, 'DELETE');
+    }
+
+    return {
+      answerText: undefined,
+      clearMarkup: false,
+    };
+  }
+
+  private async handleEditCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BulkCallbackResult> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    if (data === CALLBACK_EDIT_START) {
+      return this.startEditTaskSelection(ctx, user.id);
+    }
+
+    if (data === CALLBACK_EDIT_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Cancelado',
+        clearMarkup: true,
+        reply: 'Listo, cancele la edicion de la tarea.',
+      };
+    }
+
+    if (data === 'edit:back:list') {
+      return this.startEditTaskSelection(ctx, user.id);
+    }
+
+    if (data.startsWith('edit:select:')) {
+      const index = Number(data.replace('edit:select:', ''));
+      const task = await this.tasksService.getEditableTaskByIndex(
+        user.id,
+        String(ctx.chat.id),
+        index,
+      );
+
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Tarea seleccionada',
+        editText: this.formatEditTaskMenu(
+          task,
+          this.usersService.resolveTimezone(user),
+        ),
+        editExtra: this.buildEditTaskKeyboard(task),
+      };
+    }
+
+    if (data.startsWith('edit:menu:')) {
+      const taskId = data.replace('edit:menu:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Editar tarea',
+        editText: this.formatEditTaskMenu(
+          task,
+          this.usersService.resolveTimezone(user),
+        ),
+        editExtra: this.buildEditTaskKeyboard(task),
+      };
+    }
+
+    if (data.startsWith('edit:field:title:')) {
+      const taskId = data.replace('edit:field:title:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'EDIT_TASK_INPUT',
+        field: 'TITLE',
+        taskId: task.id,
+      });
+
+      return {
+        answerText: 'Editar titulo',
+        editText: [
+          `Editar titulo de "${task.title}"`,
+          '',
+          'Escribe el nuevo titulo.',
+          'Si prefieres salir, responde "Cancelar".',
+        ].join('\n'),
+        editExtra: this.buildEditInputKeyboard(task.id),
+      };
+    }
+
+    if (data.startsWith('edit:field:due:')) {
+      const taskId = data.replace('edit:field:due:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      return {
+        answerText: 'Editar fecha',
+        editText: [
+          `Editar fecha/hora de "${task.title}"`,
+          '',
+          'Elige una opcion rapida o toca "Otro..." para escribir una fecha/hora personalizada.',
+        ].join('\n'),
+        editExtra: this.buildEditDueDateKeyboard(task.id),
+      };
+    }
+
+    if (data.startsWith('edit:due:quick:')) {
+      const [, , , taskId, option] = data.split(':');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      const dueDate = this.resolveQuickDueDateOption(
+        option,
+        task,
+        this.usersService.resolveTimezone(user),
+      );
+      const updatedTask = await this.tasksService.updateTaskDueDate(
+        user.id,
+        taskId,
+        dueDate,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+      return {
+        answerText: 'Fecha actualizada',
+        editText: this.formatEditTaskMenu(
+          updatedTask,
+          this.usersService.resolveTimezone(user),
+        ),
+        editExtra: this.buildEditTaskKeyboard(updatedTask),
+      };
+    }
+
+    if (data.startsWith('edit:due:custom:')) {
+      const taskId = data.replace('edit:due:custom:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'EDIT_TASK_INPUT',
+        field: 'DUE_DATE',
+        taskId: task.id,
+      });
+
+      return {
+        answerText: 'Fecha personalizada',
+        editText: [
+          `Editar fecha/hora de "${task.title}"`,
+          '',
+          'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
+          'Si prefieres salir, responde "Cancelar".',
+        ].join('\n'),
+        editExtra: this.buildEditDueDateKeyboard(task.id),
+      };
+    }
+
+    if (data.startsWith('edit:field:note:')) {
+      const taskId = data.replace('edit:field:note:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'EDIT_TASK_INPUT',
+        field: 'NOTE',
+        taskId: task.id,
+      });
+
+      return {
+        answerText: 'Editar nota',
+        editText: [
+          `Editar nota de "${task.title}"`,
+          '',
+          task.description?.trim()
+            ? `Nota actual:\n${task.description}`
+            : 'Actualmente no tiene nota.',
+          '',
+          'Escribe la nueva nota. Puede tener varias lineas.',
+          'Si prefieres salir, responde "Cancelar".',
+        ].join('\n'),
+        editExtra: this.buildEditNoteKeyboard(task),
+      };
+    }
+
+    if (data.startsWith('edit:due:clear:')) {
+      const taskId = data.replace('edit:due:clear:', '');
+      const task = await this.tasksService.updateTaskDueDate(
+        user.id,
+        taskId,
+        null,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+      return {
+        answerText: 'Sin fecha',
+        editText: this.formatEditTaskMenu(
+          task,
+          this.usersService.resolveTimezone(user),
+        ),
+        editExtra: this.buildEditTaskKeyboard(task),
+      };
+    }
+
+    if (data.startsWith('edit:note:clear:')) {
+      const taskId = data.replace('edit:note:clear:', '');
+      const task = await this.tasksService.updateTaskDescription(
+        user.id,
+        taskId,
+        null,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+      return {
+        answerText: 'Nota borrada',
+        editText: this.formatEditTaskMenu(
+          task,
+          this.usersService.resolveTimezone(user),
+        ),
+        editExtra: this.buildEditTaskKeyboard(task),
+      };
     }
 
     return {
@@ -1361,6 +1605,38 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private async startEditTaskSelection(
+    ctx: BotReplyContext,
+    userId: string,
+  ): Promise<BulkCallbackResult> {
+    let tasks = await this.tasksService.getTasksFromContext(String(ctx.chat.id));
+    if (tasks.length === 0) {
+      tasks = await this.tasksService.listPendingTasks(userId);
+      await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+    }
+
+    if (tasks.length === 0) {
+      throw new BadRequestException(
+        'No hay una lista reciente con tareas para editar.',
+      );
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'EDIT_TASK_SELECTION',
+    });
+
+    return {
+      answerText: 'Editar tarea',
+      editText: this.formatEditSelectionPrompt(
+        tasks,
+        this.usersService.resolveTimezone(
+          await this.usersService.requireActiveUser(userId),
+        ),
+      ),
+      editExtra: this.buildEditSelectionKeyboard(tasks),
+    };
+  }
+
   private async toggleBulkTaskSelection(
     ctx: BotReplyContext,
     mode: 'COMPLETE' | 'DELETE',
@@ -1445,14 +1721,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return this.handleWizardInput(ctx, userId, ctx.message.text.trim());
   }
 
-  private async tryHandleEditTaskWizard(
+  private async tryHandleEditTaskInput(
     ctx: BotTextContext,
     userId: string,
   ): Promise<BotResponse | null> {
     const pendingAction = await this.tasksService.getPendingAction(
       String(ctx.chat.id),
     );
-    if (!pendingAction || pendingAction.type !== 'EDIT_TASK_WIZARD') {
+    if (!pendingAction || pendingAction.type !== 'EDIT_TASK_INPUT') {
       return null;
     }
 
@@ -1464,56 +1740,82 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return 'Listo, cancele la edicion de la tarea.';
     }
 
-    if (pendingAction.step === 'DUE_DATE') {
-      const dueDate = await this.resolveWizardDueDate(text, userId);
-      await this.tasksService.setPendingAction(String(ctx.chat.id), {
-        type: 'EDIT_TASK_WIZARD',
-        step: 'CONFIRM',
-        taskId: pendingAction.taskId,
-        draft: {
-          dueDate,
-          dueDateInput: text,
-        },
-      });
+    if (pendingAction.field === 'TITLE') {
+      if (!text) {
+        throw new BadRequestException('Escribe un titulo valido.');
+      }
 
-      return [
-        'Asi quedaria el nuevo vencimiento',
-        `Vence: ${
-          dueDate
-            ? DateTime.fromISO(dueDate)
-                .setZone(
-                  this.configService.get<string>(
-                    'DEFAULT_TIMEZONE',
-                    'America/Santiago',
-                  ),
-                )
-                .toFormat('yyyy-LL-dd HH:mm')
-            : 'Sin fecha'
-        }`,
-        '',
-        'Responde "Guardar" o "si" para confirmar.',
-      ].join('\n');
-    }
-
-    if (
-      lowered !== 'si' &&
-      lowered !== 'sí' &&
-      lowered !== 'guardar'
-    ) {
-      throw new BadRequestException(
-        'Responde "Guardar" o "si" para confirmar, o "Cancelar" para salir.',
+      const updatedTask = await this.tasksService.updateTaskTitle(
+        userId,
+        pendingAction.taskId,
+        text,
       );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        text: [
+          'Listo. Actualice el titulo de la tarea.',
+          '',
+          this.formatEditTaskMenu(
+            updatedTask,
+            this.usersService.resolveTimezone(
+              await this.usersService.requireActiveUser(userId),
+            ),
+          ),
+        ].join('\n'),
+        extra: this.buildEditTaskKeyboard(updatedTask),
+      };
     }
 
-    await this.tasksService.clearPendingAction(String(ctx.chat.id));
-    const updatedTask = await this.tasksService.updateTaskDueDate(
+    if (pendingAction.field === 'DUE_DATE') {
+      const dueDate = await this.resolveWizardDueDate(text, userId);
+      const updatedTask = await this.tasksService.updateTaskDueDate(
+        userId,
+        pendingAction.taskId,
+        dueDate,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+      return {
+        text: [
+          'Listo. Actualice la fecha/hora de la tarea.',
+          '',
+          this.formatEditTaskMenu(
+            updatedTask,
+            this.usersService.resolveTimezone(
+              await this.usersService.requireActiveUser(userId),
+            ),
+          ),
+        ].join('\n'),
+        extra: this.buildEditTaskKeyboard(updatedTask),
+      };
+    }
+
+    const description =
+      lowered === 'borrar' || lowered === 'eliminar' || lowered === 'quitar'
+        ? null
+        : ctx.message.text.trim();
+    const updatedTask = await this.tasksService.updateTaskDescription(
       userId,
       pendingAction.taskId,
-      pendingAction.draft.dueDate ?? null,
+      description,
     );
-    const user = await this.usersService.requireActiveUser(userId);
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
 
-    return `Listo. Actualice "${updatedTask.title}" para que venza ${updatedTask.dueDate ? this.formatDueLabel(updatedTask.dueDate, this.usersService.resolveTimezone(user)) : 'sin fecha'}.`;
+    return {
+      text: [
+        description
+          ? 'Listo. Actualice la nota de la tarea.'
+          : 'Listo. Quite la nota de la tarea.',
+        '',
+        this.formatEditTaskMenu(
+          updatedTask,
+          this.usersService.resolveTimezone(
+            await this.usersService.requireActiveUser(userId),
+          ),
+        ),
+      ].join('\n'),
+      extra: this.buildEditTaskKeyboard(updatedTask),
+    };
   }
 
   private async tryHandleEditTaskSelection(
@@ -1548,68 +1850,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       index,
     );
 
-    await this.tasksService.setPendingAction(String(ctx.chat.id), {
-      type: 'EDIT_TASK_WIZARD',
-      step: 'DUE_DATE',
-      taskId: task.id,
-      draft: {},
-    });
-
-    const user = await this.usersService.requireActiveUser(userId);
-    const timezone = this.usersService.resolveTimezone(user);
-    const currentDue = task.dueDate
-      ? this.formatDueLabel(task.dueDate, timezone)
-      : 'sin fecha';
-    const overdue =
-      task.dueDate &&
-      DateTime.fromJSDate(task.dueDate).setZone(timezone) <
-        DateTime.now().setZone(timezone)
-        ? '\n\nEsta tarea ya esta vencida.'
-        : '';
-
-    return [
-      `Vamos a editar "${task.title}".`,
-      `Vencimiento actual: ${currentDue}.${overdue}`,
-      '',
-      'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
-      'Si quieres quitar el vencimiento, responde "Sin fecha".',
-      'Si prefieres salir, responde "Cancelar".',
-    ].join('\n');
-  }
-
-  private async tryHandleTaskNoteWizard(
-    ctx: BotTextContext,
-    userId: string,
-  ): Promise<BotResponse | null> {
-    const pendingAction = await this.tasksService.getPendingAction(
-      String(ctx.chat.id),
-    );
-    if (!pendingAction || pendingAction.type !== 'TASK_NOTE_WIZARD') {
-      return null;
-    }
-
-    const text = ctx.message.text.trim();
-    const lowered = text.toLowerCase();
-
-    if (lowered === 'cancelar' || text === MENU_CANCEL) {
-      await this.tasksService.clearPendingAction(String(ctx.chat.id));
-      return 'Listo, cancele la edicion de la nota.';
-    }
-
-    await this.tasksService.clearPendingAction(String(ctx.chat.id));
-    const description =
-      lowered === 'borrar' || lowered === 'eliminar' || lowered === 'quitar'
-        ? null
-        : ctx.message.text.trim();
-    const updatedTask = await this.tasksService.updateTaskDescription(
-      userId,
-      pendingAction.taskId,
-      description,
-    );
-
-    return description
-      ? `Listo. Actualice la nota de "${updatedTask.title}".`
-      : `Listo. Quite la nota de "${updatedTask.title}".`;
+    return {
+      text: this.formatEditTaskMenu(
+        task,
+        this.usersService.resolveTimezone(
+          await this.usersService.requireActiveUser(userId),
+        ),
+      ),
+      extra: this.buildEditTaskKeyboard(task),
+    };
   }
 
   private async handleWizardInput(
@@ -1937,6 +2186,40 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `"${task.title}" ${scope}, ${due}${priority}.`;
   }
 
+  private resolveQuickDueDateOption(
+    option: string,
+    task: DisplayTask,
+    timezone: string,
+  ) {
+    const now = DateTime.now().setZone(timezone);
+
+    if (option === 'plus30m') {
+      return now.plus({ minutes: 30 }).toUTC().toISO();
+    }
+
+    if (option === 'plus2h') {
+      return now.plus({ hours: 2 }).toUTC().toISO();
+    }
+
+    if (option === 'tomorrow') {
+      const taskDue = task.dueDate
+        ? DateTime.fromJSDate(task.dueDate).setZone(timezone)
+        : null;
+      const hasSpecificTime = taskDue
+        ? !(taskDue.hour === 0 && taskDue.minute === 0)
+        : false;
+      const tomorrow = now.plus({ days: 1 }).startOf('day').set({
+        hour: hasSpecificTime ? taskDue!.hour : 9,
+        minute: hasSpecificTime ? taskDue!.minute : 0,
+        second: 0,
+        millisecond: 0,
+      });
+      return tomorrow.toUTC().toISO();
+    }
+
+    throw new BadRequestException('Opcion de fecha rapida no valida.');
+  }
+
   private isTaskOverdue(task: DisplayTask, timezone: string) {
     if (!task.dueDate || task.status === TaskStatus.COMPLETED) {
       return false;
@@ -2116,6 +2399,134 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ),
     ]);
     rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_BULK_CANCEL)]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private formatEditSelectionPrompt(
+    tasks: (DisplayTask & { id: string })[],
+    timezone: string,
+  ) {
+    const lines = tasks.map(
+      (task, index) => `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`,
+    );
+
+    return [
+      '¿Que tarea quieres editar?',
+      '',
+      lines.join('\n'),
+      '',
+      'Puedes tocar una opcion o responder solo con el numero.',
+    ].join('\n');
+  }
+
+  private buildEditSelectionKeyboard(tasks: (DisplayTask & { id: string })[]) {
+    const rows = tasks.map((task, index) => [
+      Markup.button.callback(
+        `${index + 1}. ${this.truncateTaskTitle(task.title, 18)}`,
+        `edit:select:${index + 1}`,
+      ),
+    ]);
+
+    rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_EDIT_CANCEL)]);
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private formatEditTaskMenu(
+    task: DisplayTask & { id?: string; description?: string | null },
+    timezone: string,
+  ) {
+    const due = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+
+    return [
+      'Editar tarea',
+      `Titulo: ${task.title}`,
+      `Vence: ${due}`,
+      `Nota: ${task.description?.trim() ? 'Sí' : 'No'}`,
+      '',
+      '¿Que quieres cambiar?',
+    ].join('\n');
+  }
+
+  private buildEditTaskKeyboard(
+    task: DisplayTask & { id: string; description?: string | null },
+  ) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✏️ Titulo',
+          `edit:field:title:${task.id}`,
+        ),
+        Markup.button.callback(
+          '🕒 Fecha/Hora',
+          `edit:field:due:${task.id}`,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          task.description?.trim() ? '📝 Editar nota' : '📝 Agregar nota',
+          `edit:field:note:${task.id}`,
+        ),
+      ],
+      [
+        Markup.button.callback('⬅️ Cambiar tarea', 'edit:back:list'),
+        Markup.button.callback('Cerrar', CALLBACK_EDIT_CANCEL),
+      ],
+    ]);
+  }
+
+  private buildEditInputKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '⬅️ Volver',
+          `edit:menu:${taskId}`,
+        ),
+        Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
+      ],
+    ]);
+  }
+
+  private buildEditDueDateKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('+30 min', `edit:due:quick:${taskId}:plus30m`),
+        Markup.button.callback('+2 horas', `edit:due:quick:${taskId}:plus2h`),
+      ],
+      [
+        Markup.button.callback('Mañana', `edit:due:quick:${taskId}:tomorrow`),
+        Markup.button.callback('Otro...', `edit:due:custom:${taskId}`),
+      ],
+      [Markup.button.callback('Sin fecha', `edit:due:clear:${taskId}`)],
+      [
+        Markup.button.callback(
+          '⬅️ Volver',
+          `edit:menu:${taskId}`,
+        ),
+        Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
+      ],
+    ]);
+  }
+
+  private buildEditNoteKeyboard(
+    task: DisplayTask & { id: string; description?: string | null },
+  ) {
+    const rows = [];
+    if (task.description?.trim()) {
+      rows.push([
+        Markup.button.callback('🗑️ Borrar nota', `edit:note:clear:${task.id}`),
+      ]);
+    }
+
+    rows.push([
+      Markup.button.callback(
+        '⬅️ Volver',
+        `edit:menu:${task.id}`,
+      ),
+      Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
+    ]);
 
     return Markup.inlineKeyboard(rows);
   }

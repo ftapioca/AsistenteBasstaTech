@@ -24,7 +24,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Indicador visual `📝` para tareas con nota
 - Vista de detalle con `/ver N`
 - Notas por tarea con `/nota N`
-- Edicion de vencimiento con `/editar`
+- Edicion contextual de tareas con `/editar`
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
 - Recordatorios automaticos
 - Briefing diario sin duplicados
@@ -90,8 +90,33 @@ La API HTTP queda en `http://localhost:3000`:
 - Las tareas con nota muestran el indicador `📝`
 - `/ver N` muestra el detalle de una tarea y su nota actual
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
-- Si envias solo `/editar`, el bot pregunta `¿Que tarea quieres editar?`, muestra la lista de pendientes y luego espera solo el numero de la tarea
+- La lista de pendientes muestra acciones contextuales para `Completar varias`, `Editar` y `Eliminar varias`
+- Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
+- La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora` y `Nota` desde menus contextuales
+- La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
 - Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado
+
+### Siguiente paso propuesto
+
+Configuracion de alertas por usuario y opcionalmente por tarea:
+
+- nivel 1: `Task.reminderMinutesBefore` como override por tarea
+- nivel 2: `User.reminderMinutesBefore` como preferencia por defecto del usuario
+- nivel 3: `Settings.reminderMinutesBefore` como fallback familiar
+- nivel 4: `REMINDER_MINUTES_BEFORE` como fallback global
+
+Orden de resolucion recomendado:
+
+1. valor configurado en la tarea
+2. valor configurado en el usuario
+3. valor configurado en la familia
+4. valor global por entorno
+
+Objetivo:
+
+- permitir que cada usuario defina con cuanta anticipacion quiere sus recordatorios
+- permitir excepciones por tarea cuando haga falta
+- mantener compatibilidad con la configuracion global actual
 
 ### Ejemplos de lenguaje natural
 
@@ -204,3 +229,4 @@ npm run start:dev
 - Este MVP solo soporta chat privado con el bot
 - Una cuenta de Telegram pertenece a una sola familia
 - Las notas de tareas usan el campo `description` del modelo `Task`
+- La edicion contextual actual de tareas usa menus inline y texto libre solo cuando el usuario debe ingresar un nuevo valor
