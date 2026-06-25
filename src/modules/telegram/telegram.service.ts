@@ -82,10 +82,8 @@ type BulkCallbackResult = {
 
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 const MENU_NEW_TASK = '➕ Nueva tarea';
-const MENU_TODAY = '📆 Hoy';
 const MENU_PENDING = '📋 Pendientes';
-const MENU_FAMILY = '👨‍👩‍👧 Familiares';
-const MENU_COMPLETED = '✅ Listas';
+const MENU_EDIT_FAMILY = '👨‍👩‍👧 Editar familia';
 const MENU_HELP = '❓ Ayuda';
 const MENU_CANCEL = 'Cancelar';
 const WIZARD_SCOPE_PERSONAL = 'Personal';
@@ -108,6 +106,7 @@ const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
 const CALLBACK_BULK_CANCEL = 'bulk:cancel';
 const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
 const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
+const CALLBACK_FAMILY_CANCEL = 'family:cancel';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -263,6 +262,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         callbackQuery: { data?: string };
       };
       await this.safeHandleBulkCallback(typedCtx);
+    });
+
+    this.bot.action(/^family:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleFamilyCallback(typedCtx);
     });
 
     this.bot.on(message('text'), async (ctx) => {
@@ -447,6 +453,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     );
 
     return `Elimine "${task.title}" de tu lista.`;
+  }
+
+  private async handleFamilyManagement(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    if (user.role !== UserRole.FAMILY_ADMIN) {
+      return [
+        'Gestion de familia',
+        '',
+        'Solo el administrador familiar puede agregar o quitar integrantes.',
+        'Si necesitas cambios, pide ayuda a la persona que creo la familia.',
+      ].join('\n');
+    }
+
+    const members = await this.usersService.listManagedUsers(user.id);
+    return [
+      {
+        text: this.formatFamilyManagementText(user.family.name, members),
+        extra: this.buildFamilyManagementKeyboard(members),
+      },
+    ][0];
   }
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
@@ -779,14 +805,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     switch (text) {
       case MENU_NEW_TASK:
         return this.startTaskWizard(ctx);
-      case MENU_TODAY:
-        return this.handleListToday(ctx);
       case MENU_PENDING:
         return this.handleListPending(ctx);
-      case MENU_FAMILY:
-        return this.handleListFamily(ctx);
-      case MENU_COMPLETED:
-        return this.handleListCompleted(ctx);
+      case MENU_EDIT_FAMILY:
+        return this.handleFamilyManagement(ctx);
       case MENU_HELP:
         return this.helpMessage;
       default:
@@ -842,6 +864,44 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
 
       const result = await this.handleBulkCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
+      await ctx.answerCbQuery(result.answerText);
+
+      if (result.editText) {
+        await ctx.editMessageText(result.editText, result.editExtra);
+      } else if (result.clearMarkup) {
+        await ctx.editMessageReplyMarkup(undefined);
+      }
+
+      if (result.reply) {
+        const payload = this.normalizeBotResponse(result.reply);
+        const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
+  private async safeHandleFamilyCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const result = await this.handleFamilyCallback(
         ctx,
         String(ctx.from.id),
         data,
@@ -946,6 +1006,78 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data === CALLBACK_BULK_CONFIRM_DELETE) {
       return this.confirmBulkTaskAction(ctx, user.id, 'DELETE');
+    }
+
+    return {
+      answerText: undefined,
+      clearMarkup: false,
+    };
+  }
+
+  private async handleFamilyCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BulkCallbackResult> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    if (user.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo el administrador familiar puede gestionar miembros.',
+      );
+    }
+
+    if (data === CALLBACK_FAMILY_CANCEL) {
+      const members = await this.usersService.listManagedUsers(user.id);
+      return {
+        answerText: 'Cancelado',
+        editText: this.formatFamilyManagementText(user.family.name, members),
+        editExtra: this.buildFamilyManagementKeyboard(members),
+      };
+    }
+
+    if (data.startsWith('family:remove:')) {
+      const targetUserId = data.replace('family:remove:', '');
+      const members = await this.usersService.listManagedUsers(user.id);
+      const target = members.find((member) => member.id === targetUserId);
+      if (!target) {
+        throw new BadRequestException(
+          'Ese usuario ya no esta disponible para quitar.',
+        );
+      }
+
+      return {
+        answerText: 'Confirmar',
+        editText: [
+          'Quitar miembro',
+          '',
+          `Vas a quitar a ${target.name} de ${user.family.name}.`,
+          'Perdera acceso al bot, pero su historial quedara guardado.',
+          '',
+          '¿Quieres continuar?',
+        ].join('\n'),
+        editExtra: this.buildFamilyRemovalConfirmationKeyboard(target.id),
+      };
+    }
+
+    if (data.startsWith('family:confirm_remove:')) {
+      const targetUserId = data.replace('family:confirm_remove:', '');
+      const removedUser = await this.usersService.deactivateManagedUser(
+        user.id,
+        targetUserId,
+      );
+      const members = await this.usersService.listManagedUsers(user.id);
+      return {
+        answerText: 'Usuario quitado',
+        editText: this.formatFamilyManagementText(user.family.name, members),
+        editExtra: this.buildFamilyManagementKeyboard(members),
+        reply: `Listo. Quite a ${removedUser.name} de la familia.`,
+      };
     }
 
     return {
@@ -1369,6 +1501,60 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `"${task.title}" ${scope}, ${due}${priority}.`;
   }
 
+  private formatFamilyManagementText(
+    familyName: string,
+    members: { id: string; name: string; phoneNumber: string }[],
+  ) {
+    const memberLines =
+      members.length === 0
+        ? ['No hay miembros gestionables por ahora.']
+        : members.map(
+            (member, index) =>
+              `${index + 1}. ${member.name} · ${member.phoneNumber}`,
+          );
+
+    return [
+      `Gestion de ${familyName}`,
+      '',
+      'Agregar miembros:',
+      'Usa /crearusuario Nombre +56912345678',
+      '',
+      'Miembros actuales:',
+      ...memberLines,
+      '',
+      'Debajo de este mensaje puedes quitar miembros.',
+    ].join('\n');
+  }
+
+  private buildFamilyManagementKeyboard(
+    members: { id: string; name: string }[],
+  ) {
+    const rows = members.map((member) => [
+      Markup.button.callback(
+        `Quitar ${this.truncateTaskTitle(member.name, 20)}`,
+        `family:remove:${member.id}`,
+      ),
+    ]);
+
+    if (rows.length === 0) {
+      rows.push([Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)]);
+    }
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private buildFamilyRemovalConfirmationKeyboard(userId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          'Quitar miembro',
+          `family:confirm_remove:${userId}`,
+        ),
+      ],
+      [Markup.button.callback('Cancelar', CALLBACK_FAMILY_CANCEL)],
+    ]);
+  }
+
   private formatScopeLabel(scope: TaskScope) {
     return scope === TaskScope.FAMILY ? '👪 Familiar' : '👤 Personal';
   }
@@ -1470,8 +1656,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private get mainMenuKeyboard() {
     return Markup.keyboard([
       [MENU_NEW_TASK, MENU_PENDING],
-      [MENU_TODAY, MENU_FAMILY],
-      [MENU_COMPLETED, MENU_HELP],
+      [MENU_EDIT_FAMILY, MENU_HELP],
     ]).resize();
   }
 
@@ -1543,6 +1728,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private get helpMessage() {
     return [
+      'Que puedes hacer con este bot',
+      '',
+      '1. Crear tareas escribiendo en lenguaje natural.',
+      'Ejemplos:',
+      '- Comprar remedios mañana a las 18:00',
+      '- Tarea familiar: pagar cuentas el viernes en la tarde',
+      '',
+      '2. Crear tareas guiadas con el boton "➕ Nueva tarea".',
+      'El bot te pide titulo, tipo, fecha y prioridad paso a paso.',
+      '',
+      '3. Ver y ordenar pendientes.',
+      'Las listas se agrupan por Hoy, Mañana, dias futuros y Sin fecha.',
+      '',
+      '4. Completar o eliminar varias tareas de una vez.',
+      'Desde una lista reciente puedes usar los botones inline para seleccionar varias tareas.',
+      '',
+      '5. Gestionar tu familia.',
+      'El administrador puede agregar y quitar miembros desde el bot.',
+      '',
+      '',
+      'Nomenclatura:',
+      '👪 Familiar: tarea compartida o visible para la familia.',
+      '👤 Personal: tarea individual.',
+      '‼️ Alta: prioridad importante.',
+      '❕ Media: prioridad normal.',
+      'Baja: sin icono especial.',
+      '',
       'Comandos disponibles:',
       '/start',
       '/ayuda',
@@ -1554,19 +1766,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/familiares',
       '/hecho 2',
       '/eliminar 2',
-      '',
-      'Tambien puedes usar el menu persistente para crear y listar tareas.',
-      '',
-      'Nomenclatura:',
-      '👪 Familiar: tarea compartida o visible para la familia.',
-      '👤 Personal: tarea individual.',
-      '‼️ Alta: prioridad importante.',
-      '❕ Media: prioridad normal.',
-      'Baja: sin icono especial.',
-      '',
-      'Tambien puedes escribir mensajes como:',
-      'Comprar pan manana',
-      'Tarea familiar: pagar cuentas',
     ].join('\n');
   }
 }

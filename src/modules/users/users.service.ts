@@ -128,6 +128,57 @@ export class UsersService {
     });
   }
 
+  async listManagedUsers(adminUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede gestionar usuarios.',
+      );
+    }
+
+    return this.prisma.user.findMany({
+      where: {
+        familyId: admin.familyId,
+        isActive: true,
+        role: UserRole.USER,
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async deactivateManagedUser(adminUserId: string, targetUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede quitar usuarios.',
+      );
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+    });
+
+    if (!target || target.familyId !== admin.familyId) {
+      throw new NotFoundException('Usuario no encontrado en tu familia.');
+    }
+
+    if (target.role === UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'No puedes quitar al administrador principal de la familia.',
+      );
+    }
+
+    return this.prisma.user.update({
+      where: { id: target.id },
+      data: {
+        isActive: false,
+        telegramUserId: null,
+        telegramChatId: null,
+        telegramUsername: null,
+      },
+    });
+  }
+
   async linkTelegramAccount(input: {
     phoneNumber: string;
     telegramUserId: string;
