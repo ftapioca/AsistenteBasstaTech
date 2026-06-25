@@ -105,6 +105,7 @@ La API HTTP queda en `http://localhost:3000`:
 - `Quitar miembro` abre un segundo paso con seleccion multiple de integrantes y boton `Eliminar`
 - en esos flujos, `Volver` regresa al paso anterior y `Cerrar` quita los botones inline del mensaje para no dejar la interfaz abierta
 - el menu principal del bot ahora depende del rol; `Editar familia` solo aparece para administradores
+- al hacer `/start`, el bot resincroniza el teclado inferior segun el rol actual del usuario para evitar menus persistidos incorrectos en Telegram
 - Al cerrar el editor, el bot muestra el estado final real de la tarea en vez de responder que la edicion fue cancelada
 - El bot usa jerarquia visual con `bold` en encabezados, preguntas, etiquetas y numeracion; el contenido de la tarea queda en texto regular
 - Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado

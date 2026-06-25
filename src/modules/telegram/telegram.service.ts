@@ -386,10 +386,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     );
 
     if (registeredUser) {
-      return {
-        text: `Hola ${registeredUser.name}. Ya estas vinculado a la familia ${registeredUser.family.name}.\n\n${this.formatHelpHome()}`,
-        extra: this.withHtml(this.buildHelpHomeKeyboard()),
-      };
+      await ctx.reply(
+        `Hola ${registeredUser.name}. Ya estas vinculado a la familia ${registeredUser.family.name}.`,
+        this.buildMainMenuKeyboard(registeredUser.role),
+      );
+      return this.buildHelpHomeResponse();
     }
 
     await ctx.reply(
@@ -675,7 +676,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             'Si necesitas cambios, pide ayuda a la persona que creo la familia.',
           ),
         ].join('\n'),
-        extra: this.withHtml(),
+        extra: this.withHtml(this.buildMainMenuKeyboard(user.role)),
       };
     }
 
