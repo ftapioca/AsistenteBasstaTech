@@ -53,6 +53,7 @@ export class TasksService {
     const user = await this.usersService.requireActiveUser(userId);
     const title = normalizeTaskTitle(dto.title);
     const dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+    const timezone = this.usersService.resolveTimezone(user);
 
     const candidates = await this.prisma.task.findMany({
       where: {
@@ -70,19 +71,27 @@ export class TasksService {
           return false;
         }
 
-        if ((task.dueDate === null) !== (dueDate === null)) {
-          return false;
-        }
-
         if (!task.dueDate && !dueDate) {
           return true;
         }
 
-        return (
-          task.dueDate !== null &&
-          dueDate !== null &&
-          Math.abs(task.dueDate.getTime() - dueDate.getTime()) < 60_000
-        );
+        if (task.dueDate && dueDate) {
+          const candidateDate = DateTime.fromJSDate(task.dueDate).setZone(
+            timezone,
+          );
+          const targetDate = DateTime.fromJSDate(dueDate).setZone(timezone);
+
+          if (candidateDate.hasSame(targetDate, 'day')) {
+            return true;
+          }
+
+          return (
+            Math.abs(task.dueDate.getTime() - dueDate.getTime()) <
+            4 * 60 * 60 * 1000
+          );
+        }
+
+        return false;
       }) ?? null
     );
   }
@@ -360,5 +369,11 @@ export class TasksService {
 }
 
 function normalizeTaskTitle(title: string) {
-  return title.trim().toLowerCase().replace(/\s+/g, ' ');
+  return title
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ');
 }
