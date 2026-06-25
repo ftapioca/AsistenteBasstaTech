@@ -114,6 +114,7 @@ const CALLBACK_BULK_CANCEL = 'bulk:cancel';
 const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
 const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
+const CALLBACK_FAMILY_CLOSE = 'family:close';
 const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
 const CALLBACK_FAMILY_RENAME = 'family:rename';
 const CALLBACK_FAMILY_START_REMOVE = 'family:start_remove';
@@ -1648,6 +1649,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data === CALLBACK_FAMILY_CLOSE) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Cerrado',
+        clearMarkup: true,
+      };
+    }
+
     if (data === CALLBACK_FAMILY_ADD_MEMBER) {
       await this.tasksService.setPendingAction(String(ctx.chat.id), {
         type: 'ADD_MEMBER_WIZARD',
@@ -2729,7 +2738,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       [Markup.button.callback('✏️ Renombrar familia', CALLBACK_FAMILY_RENAME)],
       [Markup.button.callback('🆕 Agregar miembro', CALLBACK_FAMILY_ADD_MEMBER)],
       [Markup.button.callback('🗑️ Quitar miembro', CALLBACK_FAMILY_START_REMOVE)],
-      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)],
+      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
     ]);
   }
 
@@ -2855,7 +2864,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
     rows.push([
       Markup.button.callback('⬅️ Volver', CALLBACK_FAMILY_CANCEL),
-      Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL),
+      Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
     ]);
 
     return Markup.inlineKeyboard(rows);

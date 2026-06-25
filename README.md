@@ -103,6 +103,7 @@ La API HTTP queda en `http://localhost:3000`:
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
 - `Editar familia` ahora muestra una pantalla inicial de acciones: `Renombrar familia`, `Agregar miembro`, `Quitar miembro` y `Cerrar`
 - `Quitar miembro` abre un segundo paso con seleccion multiple de integrantes y boton `Eliminar`
+- en esos flujos, `Volver` regresa al paso anterior y `Cerrar` quita los botones inline del mensaje para no dejar la interfaz abierta
 - el menu principal del bot ahora depende del rol; `Editar familia` solo aparece para administradores
 - Al cerrar el editor, el bot muestra el estado final real de la tarea en vez de responder que la edicion fue cancelada
 - El bot usa jerarquia visual con `bold` en encabezados, preguntas, etiquetas y numeracion; el contenido de la tarea queda en texto regular
