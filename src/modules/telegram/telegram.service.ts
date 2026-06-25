@@ -484,6 +484,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return this.createTaskWithChecks(ctx, user.id, dto, ctx.message.text);
       }
       default:
+        if (this.looksLikePotentialTask(ctx.message.text)) {
+          const dto = validateDto(CreateTaskDto, {
+            title: this.buildFallbackTaskTitle(ctx.message.text),
+            description: null,
+            scope: TaskScope.PERSONAL,
+            priority: Priority.MEDIUM,
+            dueDate: null,
+          });
+          await this.tasksService.setPendingAction(String(ctx.chat.id), {
+            type: 'CREATE_TASK_CONFIRMATION',
+            reason: 'AMBIGUOUS_DATE',
+            dto,
+          });
+          return `Eso parece una tarea, pero no pude resolver bien la fecha o el detalle. Entendi esto como "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
+        }
+
         return 'No pude interpretar esa solicitud. Usa /ayuda para ver ejemplos.';
     }
   }
@@ -569,6 +585,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return /(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|pasado mañana|fin de semana|en la tarde|en la mañana|en la noche|a las \d{1,2})/.test(
       lowered,
     );
+  }
+
+  private looksLikePotentialTask(message: string) {
+    const lowered = message.trim().toLowerCase();
+    return /(recordarme|recu[eé]rdame|recordar|acu[eé]rdame|no olvidar|tengo que|hay que|debo|necesito)/.test(
+      lowered,
+    );
+  }
+
+  private buildFallbackTaskTitle(message: string) {
+    return message
+      .trim()
+      .replace(
+        /^(recordarme|recu[eé]rdame|recordar|acu[eé]rdame|no olvidar)\s+/i,
+        '',
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private async tryHandlePendingConfirmation(

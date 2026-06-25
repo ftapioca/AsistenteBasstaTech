@@ -75,6 +75,7 @@ export class AiService {
                   'Debes resolver expresiones relativas en espanol como "manana", "el viernes", "en la tarde", "a las 18:00" usando la fecha de referencia.',
                   'Si dices "en la tarde" y no hay hora exacta, usa 15:00:00.',
                   'Si la prioridad esta explicita como alta/media/baja, mapearla a HIGH/MEDIUM/LOW.',
+                  'Frases como "recordarme", "recuérdame", "recordar", "acuérdame" o "no olvidar" normalmente representan CREATE_TASK aunque la fecha o el detalle sea ambiguo.',
                   'El title debe ser breve y limpio; no incluyas en el title fragmentos como "prioridad alta" o fechas si pueden ir estructurados.',
                   'Si no puedes determinar la fecha con certeza, usa dueDate=null.',
                 ].join(' '),
@@ -209,7 +210,13 @@ export class AiService {
     const scope = familyPrefix.test(text)
       ? TaskScope.FAMILY
       : TaskScope.PERSONAL;
-    const title = text.replace(familyPrefix, '').trim();
+    const title = text
+      .replace(familyPrefix, '')
+      .replace(
+        /^(recordarme|recu[eé]rdame|recordar|acu[eé]rdame|no olvidar)\s+/i,
+        '',
+      )
+      .trim();
     if (!title) {
       return { intent: 'UNKNOWN' };
     }
