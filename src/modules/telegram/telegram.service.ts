@@ -623,11 +623,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const now = DateTime.now().setZone(timezone);
     const today: string[] = [];
-    const upcoming: string[] = [];
+    const tomorrow: string[] = [];
+    const futureByDay = new Map<string, string[]>();
     const noDate: string[] = [];
 
     tasks.forEach((task, index) => {
-      const line = `${index + 1}. ${this.formatTaskLine(task, timezone, true)}`;
+      const line = `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`;
       if (!task.dueDate) {
         noDate.push(line);
         return;
@@ -639,15 +640,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      upcoming.push(line);
+      if (due.hasSame(now.plus({ days: 1 }), 'day')) {
+        tomorrow.push(line);
+        return;
+      }
+
+      const bucketKey =
+        due.startOf('day').toISODate() ?? due.toFormat('yyyy-LL-dd');
+      const bucket = futureByDay.get(bucketKey) ?? [];
+      bucket.push(line);
+      futureByDay.set(bucketKey, bucket);
     });
 
     const sections = [headings[listType]];
     if (today.length > 0) {
-      sections.push(`Vencen hoy\n${today.join('\n')}`);
+      sections.push(`Hoy\n${today.join('\n')}`);
     }
-    if (upcoming.length > 0) {
-      sections.push(`Proximas\n${upcoming.join('\n')}`);
+    if (tomorrow.length > 0) {
+      sections.push(`Mañana\n${tomorrow.join('\n')}`);
+    }
+    for (const [bucketKey, lines] of futureByDay.entries()) {
+      const bucketDate = DateTime.fromISO(bucketKey, {
+        zone: timezone,
+      }).setLocale('es');
+      sections.push(
+        `${bucketDate.toFormat('cccc dd/LL').replace(/^./, (char) => char.toUpperCase())}\n${lines.join('\n')}`,
+      );
     }
     if (noDate.length > 0) {
       sections.push(`Sin fecha\n${noDate.join('\n')}`);
@@ -1270,20 +1288,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           .setZone(timezone)
           .toFormat('yyyy-LL-dd HH:mm')
       : 'Sin fecha';
-    const scope = draft.scope === TaskScope.FAMILY ? 'Familiar' : 'Personal';
-    const priority =
-      draft.priority === Priority.HIGH
-        ? 'Alta'
-        : draft.priority === Priority.LOW
-          ? 'Baja'
-          : 'Media';
 
     return [
       'Asi quedaria la tarea',
       `Titulo: ${draft.title ?? '-'}`,
-      `Tipo: ${scope}`,
+      `Tipo: ${this.formatScopeLabel(draft.scope ?? TaskScope.PERSONAL)}`,
       `Vence: ${dueDate}`,
-      `Prioridad: ${priority}`,
+      `Prioridad: ${this.formatPriorityLabel(draft.priority ?? Priority.MEDIUM)}`,
       '',
       'Responde "Crear tarea" o "si" para confirmarla.',
     ].join('\n');
@@ -1292,33 +1303,50 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private formatTaskLine(
     task: DisplayTask,
     timezone: string,
-    relativeDate: boolean,
+    includeDate: boolean,
   ) {
     const badges = [
-      task.priority === Priority.HIGH ? '🔴' : '',
-      task.scope === TaskScope.FAMILY ? 'Familiar' : 'Personal',
+      this.formatScopeIcon(task.scope),
+      this.formatPriorityBadge(task.priority),
     ]
       .filter(Boolean)
       .join(' ');
     const due = task.dueDate
-      ? relativeDate
-        ? this.formatDueLabel(task.dueDate, timezone)
-        : `para ${DateTime.fromJSDate(task.dueDate).setZone(timezone).toFormat('HH:mm')}`
+      ? this.formatTaskDueText(task.dueDate, timezone, includeDate)
       : 'sin fecha';
 
-    return `${task.title} · ${badges} · ${due}`;
+    return `${badges} ${task.title} · ${due}`.trim();
+  }
+
+  private formatTaskDueText(
+    dueDate: Date,
+    timezone: string,
+    includeDate: boolean,
+  ) {
+    const due = DateTime.fromJSDate(dueDate).setZone(timezone).setLocale('es');
+    const hasSpecificTime = !(due.hour === 0 && due.minute === 0);
+
+    if (!includeDate) {
+      return hasSpecificTime ? `a las ${due.toFormat('HH:mm')}` : 'sin hora';
+    }
+
+    if (hasSpecificTime) {
+      return `${this.formatDueLabel(dueDate, timezone)}`;
+    }
+
+    return due.toFormat('cccc dd/LL');
   }
 
   private formatDueLabel(dueDate: Date, timezone: string) {
-    const due = DateTime.fromJSDate(dueDate).setZone(timezone);
-    const now = DateTime.now().setZone(timezone);
+    const due = DateTime.fromJSDate(dueDate).setZone(timezone).setLocale('es');
+    const now = DateTime.now().setZone(timezone).setLocale('es');
 
     if (due.hasSame(now, 'day')) {
       return `hoy a las ${due.toFormat('HH:mm')}`;
     }
 
     if (due.hasSame(now.plus({ days: 1 }), 'day')) {
-      return `manana a las ${due.toFormat('HH:mm')}`;
+      return `mañana a las ${due.toFormat('HH:mm')}`;
     }
 
     return due.toFormat("'el' cccc dd/LL 'a las' HH:mm");
@@ -1327,14 +1355,50 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private formatTaskCreatedSummary(task: DisplayTask, timezone: string) {
     const scope =
       task.scope === TaskScope.FAMILY
-        ? 'como tarea familiar'
-        : 'como tarea personal';
+        ? 'como tarea familiar 👪'
+        : 'como tarea personal 👤';
     const due = task.dueDate
       ? this.formatDueLabel(task.dueDate, timezone)
       : 'sin fecha';
     const priority =
-      task.priority === Priority.HIGH ? ' con prioridad alta 🔴' : '';
+      task.priority === Priority.HIGH
+        ? ' con prioridad alta ‼️'
+        : task.priority === Priority.MEDIUM
+          ? ' con prioridad media ⚠️'
+          : '';
     return `"${task.title}" ${scope}, ${due}${priority}.`;
+  }
+
+  private formatScopeLabel(scope: TaskScope) {
+    return scope === TaskScope.FAMILY ? '👪 Familiar' : '👤 Personal';
+  }
+
+  private formatScopeIcon(scope: TaskScope) {
+    return scope === TaskScope.FAMILY ? '👪' : '👤';
+  }
+
+  private formatPriorityBadge(priority?: Priority) {
+    if (priority === Priority.HIGH) {
+      return '‼️';
+    }
+
+    if (priority === Priority.MEDIUM) {
+      return '❕';
+    }
+
+    return '';
+  }
+
+  private formatPriorityLabel(priority: Priority) {
+    if (priority === Priority.HIGH) {
+      return 'Alta ‼️';
+    }
+
+    if (priority === Priority.MEDIUM) {
+      return 'Media ❕';
+    }
+
+    return 'Baja';
   }
 
   private formatBulkSelectionPrompt(
@@ -1492,6 +1556,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/eliminar 2',
       '',
       'Tambien puedes usar el menu persistente para crear y listar tareas.',
+      '',
+      'Nomenclatura:',
+      '👪 Familiar: tarea compartida o visible para la familia.',
+      '👤 Personal: tarea individual.',
+      '‼️ Alta: prioridad importante.',
+      '❕ Media: prioridad normal.',
+      'Baja: sin icono especial.',
       '',
       'Tambien puedes escribir mensajes como:',
       'Comprar pan manana',
