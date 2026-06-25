@@ -101,7 +101,9 @@ La API HTTP queda en `http://localhost:3000`:
 - `/alertas` permite definir la anticipacion predeterminada de recordatorios por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
-- `Editar familia` ahora permite renombrar la familia y seguir agregando o quitando miembros
+- `Editar familia` ahora muestra una pantalla inicial de acciones: `Renombrar familia`, `Agregar miembro`, `Quitar miembro` y `Cerrar`
+- `Quitar miembro` abre un segundo paso con seleccion multiple de integrantes y boton `Eliminar`
+- el menu principal del bot ahora depende del rol; `Editar familia` solo aparece para administradores
 - Al cerrar el editor, el bot muestra el estado final real de la tarea en vez de responder que la edicion fue cancelada
 - El bot usa jerarquia visual con `bold` en encabezados, preguntas, etiquetas y numeracion; el contenido de la tarea queda en texto regular
 - Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado

@@ -116,6 +116,8 @@ const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
 const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
 const CALLBACK_FAMILY_RENAME = 'family:rename';
+const CALLBACK_FAMILY_START_REMOVE = 'family:start_remove';
+const CALLBACK_FAMILY_CONFIRM_REMOVE = 'family:confirm_remove';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -458,7 +460,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     });
 
     return {
-      text: 'Vamos a crear una tarea.\n\nPrimero, escribe el titulo.\nEjemplo: Comprar remedios para mi mama.\n\nPuedes responder "Cancelar" en cualquier paso.',
+      text: [
+        this.bold('Vamos a crear una tarea.'),
+        '',
+        this.bold('Primero, escribe el titulo.'),
+        'Ejemplo: Comprar remedios para mi mama.',
+        '',
+        this.bold('Puedes responder "Cancelar" en cualquier paso.'),
+      ].join('\n'),
+      extra: this.withHtml(),
     };
   }
 
@@ -626,15 +636,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     return {
       text: [
-        `Editar nota de "${task.title}"`,
+        this.bold(`Editar nota de "${task.title}"`),
         '',
         task.description?.trim()
-          ? `Nota actual:\n${task.description}`
+          ? `${this.bold('Nota actual:')}\n${this.escapeHtml(task.description)}`
           : 'Actualmente no tiene nota.',
         '',
-        'Escribe la nueva nota. Puede tener varias lineas.',
-        'Si quieres borrar la nota, usa el boton correspondiente o responde "Borrar".',
-        'Si prefieres salir, responde "Cancelar".',
+        this.bold('Escribe la nueva nota. Puede tener varias lineas.'),
+        this.bold(
+          'Si quieres borrar la nota, usa el boton correspondiente o responde "Borrar".',
+        ),
+        this.bold('Si prefieres salir, responde "Cancelar".'),
       ].join('\n'),
       extra: this.withHtml(this.buildEditNoteKeyboard(task)),
     };
@@ -651,21 +663,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private async handleFamilyManagement(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     if (user.role !== UserRole.FAMILY_ADMIN) {
-      return [
-        'Gestion de familia',
-        '',
-        'Solo el administrador familiar puede agregar o quitar integrantes.',
-        'Si necesitas cambios, pide ayuda a la persona que creo la familia.',
-      ].join('\n');
+      return {
+        text: [
+          this.bold('Gestion de familia'),
+          '',
+          this.bold(
+            'Solo el administrador familiar puede agregar o quitar integrantes.',
+          ),
+          this.bold(
+            'Si necesitas cambios, pide ayuda a la persona que creo la familia.',
+          ),
+        ].join('\n'),
+        extra: this.withHtml(),
+      };
     }
 
-    const members = await this.usersService.listManagedUsers(user.id);
-    return [
-      {
-        text: this.formatFamilyManagementText(user.family.name, members),
-        extra: this.buildFamilyManagementKeyboard(members),
-      },
-    ][0];
+    return {
+      text: this.formatFamilyManagementText(user.family.name),
+      extra: this.withHtml(this.buildFamilyManagementKeyboard()),
+    };
   }
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
@@ -1624,12 +1640,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (data === CALLBACK_FAMILY_CANCEL) {
-      const members = await this.usersService.listManagedUsers(user.id);
       await this.tasksService.clearPendingAction(String(ctx.chat.id));
       return {
         answerText: 'Cancelado',
-        editText: this.formatFamilyManagementText(user.family.name, members),
-        editExtra: this.buildFamilyManagementKeyboard(members),
+        editText: this.formatFamilyManagementText(user.family.name),
+        editExtra: this.withHtml(this.buildFamilyManagementKeyboard()),
       };
     }
 
@@ -1643,10 +1658,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         answerText: 'Agregar miembro',
         clearMarkup: true,
         reply: [
-          'Vamos a agregar un miembro.',
+          this.bold('Vamos a agregar un miembro.'),
           '',
-          'Primero, escribe el nombre con el que quieres guardarlo.',
-          'Despues te pedire que compartas su contacto.',
+          this.bold('Primero, escribe el nombre con el que quieres guardarlo.'),
+          this.bold('Despues te pedire que compartas su contacto.'),
         ].join('\n'),
       };
     }
@@ -1659,17 +1674,39 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         answerText: 'Renombrar familia',
         clearMarkup: true,
         reply: [
-          `El nombre actual es "${user.family.name}".`,
+          this.bold(`El nombre actual es "${user.family.name}".`),
           '',
-          'Escribe el nuevo nombre de la familia.',
-          'Si prefieres salir, responde "Cancelar".',
+          this.bold('Escribe el nuevo nombre de la familia.'),
+          this.bold('Si prefieres salir, responde "Cancelar".'),
         ].join('\n'),
       };
     }
 
-    if (data.startsWith('family:remove:')) {
-      const targetUserId = data.replace('family:remove:', '');
+    if (data === CALLBACK_FAMILY_START_REMOVE) {
       const members = await this.usersService.listManagedUsers(user.id);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'FAMILY_REMOVE_WIZARD',
+        memberIds: members.map((member) => member.id),
+        selectedMemberIds: [],
+      });
+
+      return {
+        answerText: 'Quitar miembro',
+        editText: this.formatFamilyRemovalPrompt(members, []),
+        editExtra: this.withHtml(this.buildFamilyRemovalKeyboard(members, [])),
+      };
+    }
+
+    if (data.startsWith('family:toggle_remove:')) {
+      const targetUserId = data.replace('family:toggle_remove:', '');
+      const pendingAction = await this.tasksService.getPendingAction(
+        String(ctx.chat.id),
+      );
+      const members = await this.usersService.listManagedUsers(user.id);
+      if (!pendingAction || pendingAction.type !== 'FAMILY_REMOVE_WIZARD') {
+        throw new BadRequestException('No hay una seleccion de integrantes activa.');
+      }
+
       const target = members.find((member) => member.id === targetUserId);
       if (!target) {
         throw new BadRequestException(
@@ -1677,32 +1714,52 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      const selectedMemberIds = pendingAction.selectedMemberIds.includes(
+        targetUserId,
+      )
+        ? pendingAction.selectedMemberIds.filter((id) => id !== targetUserId)
+        : [...pendingAction.selectedMemberIds, targetUserId];
+
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'FAMILY_REMOVE_WIZARD',
+        memberIds: pendingAction.memberIds,
+        selectedMemberIds,
+      });
+
       return {
-        answerText: 'Confirmar',
-        editText: [
-          'Quitar miembro',
-          '',
-          `Vas a quitar a ${target.name} de ${user.family.name}.`,
-          'Perdera acceso al bot, pero su historial quedara guardado.',
-          '',
-          '¿Quieres continuar?',
-        ].join('\n'),
-        editExtra: this.buildFamilyRemovalConfirmationKeyboard(target.id),
+        answerText: selectedMemberIds.includes(targetUserId)
+          ? 'Seleccionado'
+          : 'Quitado',
+        editText: this.formatFamilyRemovalPrompt(members, selectedMemberIds),
+        editExtra: this.withHtml(
+          this.buildFamilyRemovalKeyboard(members, selectedMemberIds),
+        ),
       };
     }
 
-    if (data.startsWith('family:confirm_remove:')) {
-      const targetUserId = data.replace('family:confirm_remove:', '');
-      const removedUser = await this.usersService.deactivateManagedUser(
-        user.id,
-        targetUserId,
+    if (data === CALLBACK_FAMILY_CONFIRM_REMOVE) {
+      const pendingAction = await this.tasksService.getPendingAction(
+        String(ctx.chat.id),
       );
-      const members = await this.usersService.listManagedUsers(user.id);
+      if (!pendingAction || pendingAction.type !== 'FAMILY_REMOVE_WIZARD') {
+        throw new BadRequestException('No hay una seleccion de integrantes activa.');
+      }
+
+      if (pendingAction.selectedMemberIds.length === 0) {
+        throw new BadRequestException('Selecciona al menos un integrante.');
+      }
+
+      const removedUsers = await this.usersService.deactivateManagedUsers(
+        user.id,
+        pendingAction.selectedMemberIds,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
       return {
-        answerText: 'Usuario quitado',
-        editText: this.formatFamilyManagementText(user.family.name, members),
-        editExtra: this.buildFamilyManagementKeyboard(members),
-        reply: `Listo. Quite a ${removedUser.name} de la familia.`,
+        answerText: 'Integrantes quitados',
+        editText: this.formatFamilyManagementText(user.family.name),
+        editExtra: this.withHtml(this.buildFamilyManagementKeyboard()),
+        reply: `Listo. Quite ${removedUsers.length} integrante${removedUsers.length === 1 ? '' : 's'} de la familia.`,
       };
     }
 
@@ -1740,14 +1797,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       });
 
       return [
-        `Perfecto. Guardare a la persona como "${text}".`,
+        this.bold(`Perfecto. Guardare a la persona como "${text}".`),
         '',
-        'Ahora comparte su contacto desde Telegram para tomar el numero.',
-        'Si prefieres salir, responde "Cancelar".',
+        this.bold('Ahora comparte su contacto desde Telegram para tomar el numero.'),
+        this.bold('Si prefieres salir, responde "Cancelar".'),
       ].join('\n');
     }
 
-    return 'Estoy esperando que compartas el contacto de esa persona.';
+    return {
+      text: this.bold('Estoy esperando que compartas el contacto de esa persona.'),
+      extra: this.withHtml(),
+    };
   }
 
   private async tryHandleAddMemberContact(
@@ -1805,10 +1865,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const family = await this.usersService.renameFamily(user.id, text);
     await this.tasksService.clearPendingAction(String(ctx.chat.id));
 
-    const members = await this.usersService.listManagedUsers(user.id);
     return {
-      text: `Listo. La familia ahora se llama "${family.name}".`,
-      extra: this.buildFamilyManagementKeyboard(members),
+      text: this.bold(`Listo. La familia ahora se llama "${family.name}".`),
+      extra: this.withHtml(this.buildFamilyManagementKeyboard()),
     };
   }
 
@@ -1835,7 +1894,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return {
       answerText: undefined,
       editText: this.formatBulkSelectionPrompt(mode, tasks, []),
-      editExtra: this.buildBulkSelectionKeyboard(mode, tasks, []),
+      editExtra: this.withHtml(this.buildBulkSelectionKeyboard(mode, tasks, [])),
     };
   }
 
@@ -1867,7 +1926,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           await this.usersService.requireActiveUser(userId),
         ),
       ),
-      editExtra: this.buildEditSelectionKeyboard(tasks),
+      editExtra: this.withHtml(this.buildEditSelectionKeyboard(tasks)),
     };
   }
 
@@ -1979,7 +2038,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? 'Seleccionada'
         : 'Quitada',
       editText: this.formatBulkSelectionPrompt(mode, tasks, selectedTaskIds),
-      editExtra: this.buildBulkSelectionKeyboard(mode, tasks, selectedTaskIds),
+      editExtra: this.withHtml(
+        this.buildBulkSelectionKeyboard(mode, tasks, selectedTaskIds),
+      ),
     };
   }
 
@@ -2652,69 +2713,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       .replace(/>/g, '&gt;');
   }
 
-  private formatFamilyManagementText(
-    familyName: string,
-    members: { id: string; name: string; phoneNumber: string }[],
-  ) {
-    const memberLines =
-      members.length === 0
-        ? ['No hay miembros gestionables por ahora.']
-        : members.map(
-            (member, index) =>
-              `${index + 1}. ${member.name} · ${member.phoneNumber}`,
-          );
-
+  private formatFamilyManagementText(familyName: string) {
     return [
-      `Gestion de ${familyName}`,
+      this.bold(`Gestion de ${familyName}`),
       '',
-      'Agregar miembros:',
-      'Usa /crearusuario Nombre +56912345678',
+      this.bold('¿Que quieres hacer?'),
       '',
-      'Miembros actuales:',
-      ...memberLines,
-      '',
-      'Debajo de este mensaje puedes quitar miembros.',
+      this.bold('Agregar miembros:'),
+      this.escapeHtml('Usa /crearusuario Nombre +56912345678'),
     ].join('\n');
   }
 
-  private buildFamilyManagementKeyboard(
-    members: { id: string; name: string }[],
-  ) {
-    const rows = [
-      [
-        Markup.button.callback(
-          '✏️ Renombrar familia',
-          CALLBACK_FAMILY_RENAME,
-        ),
-      ],
-      [
-        Markup.button.callback(
-          '🆕 Agregar miembro',
-          CALLBACK_FAMILY_ADD_MEMBER,
-        ),
-      ],
-      ...members.map((member) => [
-        Markup.button.callback(
-          `Quitar ${this.truncateTaskTitle(member.name, 20)}`,
-          `family:remove:${member.id}`,
-        ),
-      ]),
-    ];
-
-    rows.push([Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)]);
-
-    return Markup.inlineKeyboard(rows);
-  }
-
-  private buildFamilyRemovalConfirmationKeyboard(userId: string) {
+  private buildFamilyManagementKeyboard() {
     return Markup.inlineKeyboard([
-      [
-        Markup.button.callback(
-          'Quitar miembro',
-          `family:confirm_remove:${userId}`,
-        ),
-      ],
-      [Markup.button.callback('Cancelar', CALLBACK_FAMILY_CANCEL)],
+      [Markup.button.callback('✏️ Renombrar familia', CALLBACK_FAMILY_RENAME)],
+      [Markup.button.callback('🆕 Agregar miembro', CALLBACK_FAMILY_ADD_MEMBER)],
+      [Markup.button.callback('🗑️ Quitar miembro', CALLBACK_FAMILY_START_REMOVE)],
+      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)],
     ]);
   }
 
@@ -2759,14 +2774,40 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const selectedCount = selectedTaskIds.length;
     const lines = tasks.map((task, index) => {
       const marker = selectedTaskIds.includes(task.id) ? '✅' : '☐';
-      return `${marker} ${index + 1}. ${this.truncateTaskTitle(task.title)}`;
+      return `${marker} ${this.bold(`${index + 1}.`)} ${this.escapeHtml(this.truncateTaskTitle(task.title))}`;
     });
 
     return [
-      `Selecciona las tareas que quieres ${actionLabel}.`,
+      this.bold(`Selecciona las tareas que quieres ${actionLabel}.`),
       selectedCount > 0
-        ? `Llevas ${selectedCount} seleccionada${selectedCount === 1 ? '' : 's'}.`
-        : 'Aun no has seleccionado ninguna.',
+        ? this.bold(
+            `Llevas ${selectedCount} seleccionada${selectedCount === 1 ? '' : 's'}.`,
+          )
+        : this.bold('Aun no has seleccionado ninguna.'),
+      '',
+      lines.join('\n'),
+    ].join('\n');
+  }
+
+  private formatFamilyRemovalPrompt(
+    members: { id: string; name: string; phoneNumber: string }[],
+    selectedMemberIds: string[],
+  ) {
+    const lines =
+      members.length === 0
+        ? [this.bold('No hay miembros para quitar por ahora.')]
+        : members.map((member, index) => {
+            const marker = selectedMemberIds.includes(member.id) ? '✅' : '☐';
+            return `${marker} ${this.bold(`${index + 1}.`)} ${this.escapeHtml(member.name)} · ${this.escapeHtml(member.phoneNumber)}`;
+          });
+
+    return [
+      this.bold('Quitar miembro'),
+      selectedMemberIds.length > 0
+        ? this.bold(
+            `Llevas ${selectedMemberIds.length} seleccionad${selectedMemberIds.length === 1 ? 'o' : 'os'}.`,
+          )
+        : this.bold('Selecciona uno o varios integrantes.'),
       '',
       lines.join('\n'),
     ].join('\n');
@@ -2793,6 +2834,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ),
     ]);
     rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_BULK_CANCEL)]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private buildFamilyRemovalKeyboard(
+    members: { id: string; name: string }[],
+    selectedMemberIds: string[],
+  ) {
+    const rows = members.map((member, index) => {
+      const selected = selectedMemberIds.includes(member.id);
+      const label = `${selected ? '✅' : '☐'} ${index + 1}. ${this.truncateTaskTitle(member.name, 18)}`;
+      return [
+        Markup.button.callback(label, `family:toggle_remove:${member.id}`),
+      ];
+    });
+
+    rows.push([
+      Markup.button.callback('🗑️ Eliminar', CALLBACK_FAMILY_CONFIRM_REMOVE),
+    ]);
+    rows.push([
+      Markup.button.callback('⬅️ Volver', CALLBACK_FAMILY_CANCEL),
+      Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL),
+    ]);
 
     return Markup.inlineKeyboard(rows);
   }
@@ -3207,14 +3271,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return undefined;
     }
 
-    return this.mainMenuKeyboard;
+    return this.buildMainMenuKeyboard(user.role);
   }
 
-  private get mainMenuKeyboard() {
-    return Markup.keyboard([
-      [MENU_NEW_TASK, MENU_PENDING],
-      [MENU_EDIT_FAMILY, MENU_HELP],
-    ]).resize();
+  private buildMainMenuKeyboard(role: UserRole) {
+    const rows =
+      role === UserRole.FAMILY_ADMIN
+        ? [
+            [MENU_NEW_TASK, MENU_PENDING],
+            [MENU_EDIT_FAMILY, MENU_HELP],
+          ]
+        : [[MENU_NEW_TASK, MENU_PENDING], [MENU_HELP]];
+
+    return Markup.keyboard(rows).resize();
   }
 
   private get wizardScopeInlineKeyboard() {

@@ -187,6 +187,18 @@ export class UsersService {
     });
   }
 
+  async deactivateManagedUsers(adminUserId: string, targetUserIds: string[]) {
+    const removedUsers = [];
+
+    for (const targetUserId of targetUserIds) {
+      removedUsers.push(
+        await this.deactivateManagedUser(adminUserId, targetUserId),
+      );
+    }
+
+    return removedUsers;
+  }
+
   async linkTelegramAccount(input: {
     phoneNumber: string;
     telegramUserId: string;

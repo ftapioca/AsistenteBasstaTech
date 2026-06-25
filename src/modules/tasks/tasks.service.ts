@@ -61,6 +61,11 @@ type PendingAction =
       type: 'RENAME_FAMILY_WIZARD';
     }
   | {
+      type: 'FAMILY_REMOVE_WIZARD';
+      memberIds: string[];
+      selectedMemberIds: string[];
+    }
+  | {
       type: 'EDIT_TASK_SELECTION';
     }
   | {
