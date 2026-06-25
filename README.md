@@ -19,7 +19,12 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Alta manual de usuarios por admin con `/crearusuario Nombre +56912345678`
 - Vinculacion de usuarios precreados compartiendo su contacto
 - Tareas personales y familiares
-- Listados `/hoy`, `/pendientes`, `/familiares`
+- Listados `/hoy`, `/pendientes`, `/familiares`, `/completadas`
+- Visualizacion de tareas vencidas en una seccion separada
+- Indicador visual `📝` para tareas con nota
+- Vista de detalle con `/ver N`
+- Notas por tarea con `/nota N`
+- Edicion de vencimiento con `/editar`
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
 - Recordatorios automaticos
 - Briefing diario sin duplicados
@@ -76,6 +81,17 @@ La API HTTP queda en `http://localhost:3000`:
 - `/editar 2`
 - `/hecho 2`
 - `/eliminar 2`
+
+### UX actual del bot
+
+- Las tareas vencidas aparecen agrupadas bajo `🚨 Tareas vencidas`
+- Las tareas del dia aparecen bajo `🗓️ Hoy`
+- El resto aparece bajo `Otras tareas`
+- Las tareas con nota muestran el indicador `📝`
+- `/ver N` muestra el detalle de una tarea y su nota actual
+- `/nota N` permite crear, editar o borrar la nota asociada a una tarea
+- Si envias solo `/editar`, el bot pregunta `¿Que tarea quieres editar?`, muestra la lista de pendientes y luego espera solo el numero de la tarea
+- Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado
 
 ### Ejemplos de lenguaje natural
 
@@ -187,3 +203,4 @@ npm run start:dev
 - La logica de negocio queda en NestJS
 - Este MVP solo soporta chat privado con el bot
 - Una cuenta de Telegram pertenece a una sola familia
+- Las notas de tareas usan el campo `description` del modelo `Task`

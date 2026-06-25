@@ -7,7 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Priority, TaskScope, UserRole } from '@prisma/client';
+import { Priority, TaskScope, TaskStatus, UserRole } from '@prisma/client';
 import { DateTime } from 'luxon';
 import { Markup, Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
@@ -57,6 +57,8 @@ type DisplayTask = {
   dueDate: Date | null;
   scope: TaskScope;
   priority?: Priority;
+  description?: string | null;
+  status?: TaskStatus;
 };
 
 type BotCallbackContext = BotReplyContext & {
@@ -454,7 +456,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleComplete(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
-    const index = Number(ctx.message.text.replace('/hecho', '').trim());
+    const index = this.parseCommandIndex(
+      ctx.message.text,
+      '/hecho',
+      'Usa /hecho N. Ejemplo: /hecho 2',
+    );
     const task = await this.tasksService.completeTaskByIndex(
       user.id,
       String(ctx.chat.id),
@@ -466,7 +472,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleDelete(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
-    const index = Number(ctx.message.text.replace('/eliminar', '').trim());
+    const index = this.parseCommandIndex(
+      ctx.message.text,
+      '/eliminar',
+      'Usa /eliminar N. Ejemplo: /eliminar 2',
+    );
     const task = await this.tasksService.cancelTaskByIndex(
       user.id,
       String(ctx.chat.id),
@@ -478,7 +488,32 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleEdit(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
-    const index = Number(ctx.message.text.replace('/editar', '').trim());
+    const raw = ctx.message.text.replace('/editar', '').trim();
+    if (!raw) {
+      const tasks = await this.tasksService.listPendingTasks(user.id);
+      await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'EDIT_TASK_SELECTION',
+      });
+
+      return [
+        '¿Que tarea quieres editar?',
+        '',
+        this.formatTaskList(
+          'pending',
+          tasks,
+          this.usersService.resolveTimezone(user),
+        ),
+        '',
+        'Responde solo con el numero de la tarea. Ejemplo: 2',
+      ].join('\n');
+    }
+
+    const index = this.parseCommandIndex(
+      ctx.message.text,
+      '/editar',
+      'Usa /editar N. Ejemplo: /editar 2',
+    );
     const task = await this.tasksService.getEditableTaskByIndex(
       user.id,
       String(ctx.chat.id),
@@ -515,7 +550,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleViewTask(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
-    const index = Number(ctx.message.text.replace('/ver', '').trim());
+    const index = this.parseCommandIndex(
+      ctx.message.text,
+      '/ver',
+      'Usa /ver N. Ejemplo: /ver 2',
+    );
     const task = await this.tasksService.getVisibleTaskByIndex(
       user.id,
       String(ctx.chat.id),
@@ -608,6 +647,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
     if (wizardReply) {
       return wizardReply;
+    }
+
+    const editSelectionReply = await this.tryHandleEditTaskSelection(ctx, user.id);
+    if (editSelectionReply) {
+      return editSelectionReply;
     }
 
     const editReply = await this.tryHandleEditTaskWizard(ctx, user.id);
@@ -781,15 +825,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const now = DateTime.now().setZone(timezone);
+    const overdue: string[] = [];
     const today: string[] = [];
-    const tomorrow: string[] = [];
-    const futureByDay = new Map<string, string[]>();
-    const noDate: string[] = [];
+    const others: string[] = [];
 
     tasks.forEach((task, index) => {
       const line = `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`;
+      if (this.isTaskOverdue(task, timezone)) {
+        overdue.push(line);
+        return;
+      }
+
       if (!task.dueDate) {
-        noDate.push(line);
+        others.push(line);
         return;
       }
 
@@ -799,35 +847,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      if (due.hasSame(now.plus({ days: 1 }), 'day')) {
-        tomorrow.push(line);
-        return;
-      }
-
-      const bucketKey =
-        due.startOf('day').toISODate() ?? due.toFormat('yyyy-LL-dd');
-      const bucket = futureByDay.get(bucketKey) ?? [];
-      bucket.push(line);
-      futureByDay.set(bucketKey, bucket);
+      others.push(line);
     });
 
     const sections = [headings[listType]];
+    if (overdue.length > 0) {
+      sections.push(`🚨 Tareas vencidas\n${overdue.join('\n')}`);
+    }
     if (today.length > 0) {
-      sections.push(`Hoy\n${today.join('\n')}`);
+      sections.push(`🗓️ Hoy\n${today.join('\n')}`);
     }
-    if (tomorrow.length > 0) {
-      sections.push(`Mañana\n${tomorrow.join('\n')}`);
-    }
-    for (const [bucketKey, lines] of futureByDay.entries()) {
-      const bucketDate = DateTime.fromISO(bucketKey, {
-        zone: timezone,
-      }).setLocale('es');
-      sections.push(
-        `${bucketDate.toFormat('cccc dd/LL').replace(/^./, (char) => char.toUpperCase())}\n${lines.join('\n')}`,
-      );
-    }
-    if (noDate.length > 0) {
-      sections.push(`Sin fecha\n${noDate.join('\n')}`);
+    if (others.length > 0) {
+      sections.push(`Otras tareas\n${others.join('\n')}`);
     }
 
     return sections.join('\n\n');
@@ -1485,6 +1516,67 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Listo. Actualice "${updatedTask.title}" para que venza ${updatedTask.dueDate ? this.formatDueLabel(updatedTask.dueDate, this.usersService.resolveTimezone(user)) : 'sin fecha'}.`;
   }
 
+  private async tryHandleEditTaskSelection(
+    ctx: BotTextContext,
+    userId: string,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'EDIT_TASK_SELECTION') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancele la edicion de la tarea.';
+    }
+
+    const index = Number(text);
+    if (!Number.isInteger(index) || index <= 0) {
+      throw new BadRequestException(
+        'Responde solo con el numero de la tarea que quieres editar. Ejemplo: 2',
+      );
+    }
+
+    const task = await this.tasksService.getEditableTaskByIndex(
+      userId,
+      String(ctx.chat.id),
+      index,
+    );
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'EDIT_TASK_WIZARD',
+      step: 'DUE_DATE',
+      taskId: task.id,
+      draft: {},
+    });
+
+    const user = await this.usersService.requireActiveUser(userId);
+    const timezone = this.usersService.resolveTimezone(user);
+    const currentDue = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+    const overdue =
+      task.dueDate &&
+      DateTime.fromJSDate(task.dueDate).setZone(timezone) <
+        DateTime.now().setZone(timezone)
+        ? '\n\nEsta tarea ya esta vencida.'
+        : '';
+
+    return [
+      `Vamos a editar "${task.title}".`,
+      `Vencimiento actual: ${currentDue}.${overdue}`,
+      '',
+      'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
+      'Si quieres quitar el vencimiento, responde "Sin fecha".',
+      'Si prefieres salir, responde "Cancelar".',
+    ].join('\n');
+  }
+
   private async tryHandleTaskNoteWizard(
     ctx: BotTextContext,
     userId: string,
@@ -1769,8 +1861,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const due = task.dueDate
       ? this.formatTaskDueText(task.dueDate, timezone, includeDate)
       : 'sin fecha';
+    const noteBadge = task.description?.trim() ? '📝' : '';
+    const overdueBadge = this.isTaskOverdue(task, timezone) ? '🚨' : '';
 
-    return `${badges} ${task.title} · ${due}`.trim();
+    return `${overdueBadge ? `${overdueBadge} ` : ''}${badges}${noteBadge ? ` ${noteBadge}` : ''} ${task.title} · ${due}`.trim();
   }
 
   private formatTaskDueText(
@@ -1780,9 +1874,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {
     const due = DateTime.fromJSDate(dueDate).setZone(timezone).setLocale('es');
     const hasSpecificTime = !(due.hour === 0 && due.minute === 0);
+    const isOverdue = due < DateTime.now().setZone(timezone);
 
     if (!includeDate) {
+      if (isOverdue) {
+        const minutesOverdue = Math.max(
+          1,
+          Math.round(DateTime.now().setZone(timezone).diff(due, 'minutes').minutes),
+        );
+        if (minutesOverdue < 60) {
+          return `vencido hace ${minutesOverdue} min`;
+        }
+
+        const hoursOverdue = Math.round((minutesOverdue / 60) * 10) / 10;
+        return `vencido hace ${hoursOverdue} hora${hoursOverdue === 1 ? '' : 's'}`;
+      }
       return hasSpecificTime ? `a las ${due.toFormat('HH:mm')}` : 'sin hora';
+    }
+
+    if (isOverdue) {
+      return hasSpecificTime
+        ? `vencida · ${due.toFormat('cccc dd/LL HH:mm')}`
+        : `vencida · ${due.toFormat('cccc dd/LL')}`;
     }
 
     if (hasSpecificTime) {
@@ -1822,6 +1935,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           ? ' con prioridad media ❕'
           : '';
     return `"${task.title}" ${scope}, ${due}${priority}.`;
+  }
+
+  private isTaskOverdue(task: DisplayTask, timezone: string) {
+    if (!task.dueDate || task.status === TaskStatus.COMPLETED) {
+      return false;
+    }
+
+    return DateTime.fromJSDate(task.dueDate).setZone(timezone) <
+      DateTime.now().setZone(timezone);
+  }
+
+  private parseCommandIndex(
+    text: string,
+    command: string,
+    invalidFormatMessage: string,
+  ) {
+    const raw = text.replace(command, '').trim();
+    const index = Number(raw);
+
+    if (!raw || !Number.isInteger(index) || index <= 0) {
+      throw new BadRequestException(invalidFormatMessage);
+    }
+
+    return index;
   }
 
   private formatTaskDetail(

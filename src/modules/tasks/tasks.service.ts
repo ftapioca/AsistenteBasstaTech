@@ -50,6 +50,9 @@ type PendingAction =
       };
     }
   | {
+      type: 'EDIT_TASK_SELECTION';
+    }
+  | {
       type: 'EDIT_TASK_WIZARD';
       step: 'DUE_DATE' | 'CONFIRM';
       taskId: string;
