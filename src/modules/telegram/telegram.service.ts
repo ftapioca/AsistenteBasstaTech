@@ -336,12 +336,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       case 'HELP':
         return this.helpMessage;
       case 'CREATE_TASK': {
+        const normalizedDueDate = this.normalizeDueDate(interpretation.dueDate);
         const dto = validateDto(CreateTaskDto, {
           title: interpretation.title ?? ctx.message.text,
           description: interpretation.description ?? null,
           scope: interpretation.scope ?? TaskScope.PERSONAL,
           priority: interpretation.priority ?? Priority.MEDIUM,
-          dueDate: interpretation.dueDate ?? null,
+          dueDate: normalizedDueDate,
         });
         const task = await this.tasksService.createTaskForUser(user.id, dto);
         return `Tarea creada: ${task.title}`;
@@ -392,6 +393,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.logger.warn(message);
       await ctx.reply(message);
     }
+  }
+
+  private normalizeDueDate(dueDate?: string | null) {
+    if (!dueDate) {
+      return null;
+    }
+
+    const parsed = new Date(dueDate);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+
+    return parsed.toISOString();
   }
 
   private get helpMessage() {

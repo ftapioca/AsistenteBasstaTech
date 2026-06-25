@@ -5,6 +5,10 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { AiInterpretation } from './ai.types';
 
+const nullableEnum = (values: string[]) => ({
+  anyOf: [{ type: 'string', enum: values }, { type: 'null' }],
+});
+
 const interpretationSchema = z.object({
   intent: z.enum([
     'CREATE_TASK',
@@ -51,7 +55,7 @@ export class AiService {
             content: [
               {
                 type: 'input_text',
-                text: 'Eres un parser de intenciones para un bot familiar de tareas. Responde solo JSON valido. No ejecutes acciones. Usa intent=UNKNOWN si falta certeza.',
+                text: 'Eres un parser de intenciones para un bot familiar de tareas. Responde solo JSON valido. No ejecutes acciones. Usa intent=UNKNOWN si falta certeza. Si entregas dueDate, debe ser una fecha ISO 8601 completa con zona horaria. Si no puedes determinarla con certeza, usa null.',
               },
             ],
           },
@@ -89,14 +93,8 @@ export class AiService {
                 },
                 title: { type: ['string', 'null'] },
                 description: { type: ['string', 'null'] },
-                scope: {
-                  type: ['string', 'null'],
-                  enum: ['PERSONAL', 'FAMILY'],
-                },
-                priority: {
-                  type: ['string', 'null'],
-                  enum: ['LOW', 'MEDIUM', 'HIGH'],
-                },
+                scope: nullableEnum(['PERSONAL', 'FAMILY']),
+                priority: nullableEnum(['LOW', 'MEDIUM', 'HIGH']),
                 dueDate: { type: ['string', 'null'] },
                 taskIndex: { type: ['integer', 'null'] },
               },
@@ -121,9 +119,24 @@ export class AiService {
 
       return interpretationSchema.parse(JSON.parse(raw));
     } catch (error) {
-      this.logger.warn(
-        `OpenAI fallback triggered: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      const errorObject =
+        error && typeof error === 'object'
+          ? (error as { status?: unknown; message?: unknown })
+          : undefined;
+      const details = errorObject
+        ? JSON.stringify(
+            {
+              status: errorObject.status,
+              message:
+                typeof errorObject.message === 'string'
+                  ? errorObject.message
+                  : String(error),
+            },
+            null,
+            2,
+          )
+        : String(error);
+      this.logger.warn(`OpenAI fallback triggered: ${details}`);
       return this.heuristicInterpretation(message);
     }
   }
