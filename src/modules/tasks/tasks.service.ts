@@ -18,12 +18,24 @@ import { UsersService } from '../users/users.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 
 type ActiveUser = NonNullable<Awaited<ReturnType<UsersService['findById']>>>;
-type PendingAction = {
-  type: 'CREATE_TASK_CONFIRMATION';
-  reason: 'AMBIGUOUS_DATE' | 'DUPLICATE_TASK';
-  dto: CreateTaskDto;
-  duplicateTaskTitle?: string;
-};
+type PendingAction =
+  | {
+      type: 'CREATE_TASK_CONFIRMATION';
+      reason: 'AMBIGUOUS_DATE' | 'DUPLICATE_TASK';
+      dto: CreateTaskDto;
+      duplicateTaskTitle?: string;
+    }
+  | {
+      type: 'CREATE_TASK_WIZARD';
+      step: 'TITLE' | 'SCOPE' | 'DUE_DATE' | 'PRIORITY' | 'CONFIRM';
+      draft: {
+        title?: string;
+        scope?: TaskScope;
+        dueDate?: string | null;
+        dueDateInput?: string | null;
+        priority?: Priority;
+      };
+    };
 
 @Injectable()
 export class TasksService {

@@ -53,6 +53,20 @@ type BotContactContext = BotReplyContext & {
 };
 
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
+const MENU_NEW_TASK = '➕ Nueva tarea';
+const MENU_TODAY = '📆 Hoy';
+const MENU_PENDING = '📋 Pendientes';
+const MENU_FAMILY = '👨‍👩‍👧 Familiares';
+const MENU_COMPLETED = '✅ Listas';
+const MENU_HELP = '❓ Ayuda';
+const MENU_CANCEL = 'Cancelar';
+const WIZARD_SCOPE_PERSONAL = 'Personal';
+const WIZARD_SCOPE_FAMILY = 'Familiar';
+const WIZARD_DUE_NONE = 'Sin fecha';
+const WIZARD_PRIORITY_HIGH = 'Alta';
+const WIZARD_PRIORITY_MEDIUM = 'Media';
+const WIZARD_PRIORITY_LOW = 'Baja';
+const WIZARD_CONFIRM_CREATE = 'Crear tarea';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -156,6 +170,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.safeReply(typedCtx, this.handleCreateUser(typedCtx));
     });
 
+    this.bot.command('nueva', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.startTaskWizard(typedCtx));
+    });
+
     this.bot.command('hoy', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       await this.safeReply(typedCtx, this.handleListToday(typedCtx));
@@ -208,6 +227,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
+      await this.syncBotCommands();
       await this.bot.telegram.deleteWebhook({
         drop_pending_updates: false,
       });
@@ -226,6 +246,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
+      await this.syncBotCommands();
       const expectedSecret = this.configService.get<string>(
         'TELEGRAM_WEBHOOK_SECRET',
       );
@@ -308,6 +329,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Usuario ${createdUser.name} creado en la familia. Debe escribir /start y compartir su contacto para vincularse.`;
   }
 
+  private async startTaskWizard(ctx: BotReplyContext) {
+    await this.requireRegisteredUser(ctx);
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'CREATE_TASK_WIZARD',
+      step: 'TITLE',
+      draft: {},
+    });
+
+    return 'Nueva tarea. Escribe el titulo.\n\nEjemplo: Comprar remedios para mi mama.\n\nPuedes responder "Cancelar" en cualquier paso.';
+  }
+
   private async handleListToday(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listTodayTasks(user.id);
@@ -378,6 +410,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
+    const menuActionReply = await this.tryHandleMenuAction(ctx);
+    if (menuActionReply) {
+      return menuActionReply;
+    }
+
+    const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
+    if (wizardReply) {
+      return wizardReply;
+    }
+
     const confirmationReply = await this.tryHandlePendingConfirmation(
       ctx,
       user.id,
@@ -432,44 +474,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       case 'HELP':
         return this.helpMessage;
       case 'CREATE_TASK': {
-        const normalizedDueDate = this.normalizeDueDate(interpretation.dueDate);
         const dto = validateDto(CreateTaskDto, {
           title: interpretation.title ?? ctx.message.text,
           description: interpretation.description ?? null,
           scope: interpretation.scope ?? TaskScope.PERSONAL,
           priority: interpretation.priority ?? Priority.MEDIUM,
-          dueDate: normalizedDueDate,
+          dueDate: this.normalizeDueDate(interpretation.dueDate),
         });
-
-        const ambiguity = this.detectTaskAmbiguity(
-          ctx.message.text,
-          normalizedDueDate,
-        );
-        if (ambiguity) {
-          await this.tasksService.setPendingAction(String(ctx.chat.id), {
-            type: 'CREATE_TASK_CONFIRMATION',
-            reason: 'AMBIGUOUS_DATE',
-            dto,
-          });
-          return `No pude determinar una fecha exacta para "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
-        }
-
-        const duplicateTask = await this.tasksService.findObviousDuplicateTask(
-          user.id,
-          dto,
-        );
-        if (duplicateTask) {
-          await this.tasksService.setPendingAction(String(ctx.chat.id), {
-            type: 'CREATE_TASK_CONFIRMATION',
-            reason: 'DUPLICATE_TASK',
-            dto,
-            duplicateTaskTitle: duplicateTask.title,
-          });
-          return `Ya existe una tarea pendiente muy parecida: "${duplicateTask.title}". ¿Quieres crear otra igual? Responde si o no.`;
-        }
-
-        const task = await this.tasksService.createTaskForUser(user.id, dto);
-        return `Tarea creada: ${task.title}`;
+        return this.createTaskWithChecks(ctx, user.id, dto, ctx.message.text);
       }
       default:
         return 'No pude interpretar esa solicitud. Usa /ayuda para ver ejemplos.';
@@ -510,11 +522,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? ` - vence ${DateTime.fromJSDate(task.dueDate).setZone(timezone).toFormat('yyyy-LL-dd HH:mm')}`
         : '';
       const scope = task.scope === TaskScope.FAMILY ? ' [FAMILIAR]' : '';
+      const priorityEmoji = task.priority === Priority.HIGH ? ' 🔴' : '';
       const priority =
         task.priority && task.priority !== Priority.MEDIUM
           ? ` [${task.priority}]`
           : '';
-      return `${index + 1}. ${task.title}${scope}${priority}${due}`;
+      return `${index + 1}. ${task.title}${scope}${priority}${priorityEmoji}${due}`;
     });
 
     return `${title}\n\n${lines.join('\n')}`;
@@ -523,12 +536,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private async safeReply(ctx: BotReplyContext, handler: Promise<string>) {
     try {
       const reply = await handler;
-      await ctx.reply(reply);
+      const extra = await this.getDefaultReplyMarkup(ctx);
+      await ctx.reply(reply, extra);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
       this.logger.warn(message);
-      await ctx.reply(message);
+      const extra = await this.getDefaultReplyMarkup(ctx);
+      await ctx.reply(message, extra);
     }
   }
 
@@ -568,7 +583,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const pendingAction = await this.tasksService.getPendingAction(
       String(ctx.chat.id),
     );
-    if (!pendingAction) {
+    if (!pendingAction || pendingAction.type !== 'CREATE_TASK_CONFIRMATION') {
       return null;
     }
 
@@ -590,11 +605,336 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Tarea duplicada creada: ${task.title}`;
   }
 
+  private async tryHandleMenuAction(ctx: BotTextContext) {
+    const text = ctx.message.text.trim();
+
+    switch (text) {
+      case MENU_NEW_TASK:
+        return this.startTaskWizard(ctx);
+      case MENU_TODAY:
+        return this.handleListToday(ctx);
+      case MENU_PENDING:
+        return this.handleListPending(ctx);
+      case MENU_FAMILY:
+        return this.handleListFamily(ctx);
+      case MENU_COMPLETED:
+        return this.handleListCompleted(ctx);
+      case MENU_HELP:
+        return this.helpMessage;
+      default:
+        return null;
+    }
+  }
+
+  private async tryHandleTaskWizard(ctx: BotTextContext, userId: string) {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'CREATE_TASK_WIZARD') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Creacion de tarea cancelada.';
+    }
+
+    switch (pendingAction.step) {
+      case 'TITLE':
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'SCOPE',
+          draft: {
+            ...pendingAction.draft,
+            title: text,
+          },
+        });
+        return '¿La tarea es personal o familiar?';
+      case 'SCOPE': {
+        const scope = this.parseWizardScope(text);
+        if (!scope) {
+          throw new BadRequestException('Responde "Personal" o "Familiar".');
+        }
+
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'DUE_DATE',
+          draft: {
+            ...pendingAction.draft,
+            scope,
+          },
+        });
+        return '¿Para cuando es? Escribe una fecha natural como "manana 18:00", "el viernes en la tarde" o responde "Sin fecha".';
+      }
+      case 'DUE_DATE': {
+        const dueDate = await this.resolveWizardDueDate(text, userId);
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'PRIORITY',
+          draft: {
+            ...pendingAction.draft,
+            dueDate,
+            dueDateInput: text,
+          },
+        });
+        return '¿Que prioridad tiene? Responde "Alta", "Media" o "Baja".';
+      }
+      case 'PRIORITY': {
+        const priority = this.parseWizardPriority(text);
+        if (!priority) {
+          throw new BadRequestException('Responde "Alta", "Media" o "Baja".');
+        }
+
+        const draft = {
+          ...pendingAction.draft,
+          priority,
+        };
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'CONFIRM',
+          draft,
+        });
+        return this.formatTaskDraftSummary(draft);
+      }
+      case 'CONFIRM':
+        if (
+          lowered !== 'si' &&
+          lowered !== 'sí' &&
+          text !== WIZARD_CONFIRM_CREATE
+        ) {
+          throw new BadRequestException(
+            'Responde "Crear tarea" o "si" para confirmar, o "Cancelar" para salir.',
+          );
+        }
+
+        await this.tasksService.clearPendingAction(String(ctx.chat.id));
+        return this.createTaskWithChecks(
+          ctx,
+          userId,
+          validateDto(CreateTaskDto, {
+            title: pendingAction.draft.title,
+            description: null,
+            scope: pendingAction.draft.scope ?? TaskScope.PERSONAL,
+            priority: pendingAction.draft.priority ?? Priority.MEDIUM,
+            dueDate: pendingAction.draft.dueDate ?? null,
+          }),
+          pendingAction.draft.dueDateInput ?? '',
+        );
+    }
+  }
+
+  private async createTaskWithChecks(
+    ctx: BotReplyContext,
+    userId: string,
+    dto: CreateTaskDto,
+    originalMessage: string,
+  ) {
+    const chatId = String(ctx.chat.id);
+    const ambiguity = this.detectTaskAmbiguity(
+      originalMessage,
+      dto.dueDate ?? null,
+    );
+    if (ambiguity) {
+      await this.tasksService.setPendingAction(chatId, {
+        type: 'CREATE_TASK_CONFIRMATION',
+        reason: 'AMBIGUOUS_DATE',
+        dto,
+      });
+      return `No pude determinar una fecha exacta para "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
+    }
+
+    const duplicateTask = await this.tasksService.findObviousDuplicateTask(
+      userId,
+      dto,
+    );
+    if (duplicateTask) {
+      await this.tasksService.setPendingAction(chatId, {
+        type: 'CREATE_TASK_CONFIRMATION',
+        reason: 'DUPLICATE_TASK',
+        dto,
+        duplicateTaskTitle: duplicateTask.title,
+      });
+      return `Ya existe una tarea pendiente muy parecida: "${duplicateTask.title}". ¿Quieres crear otra igual? Responde si o no.`;
+    }
+
+    const task = await this.tasksService.createTaskForUser(userId, dto);
+    return `Tarea creada: ${task.title}`;
+  }
+
+  private async resolveWizardDueDate(text: string, userId: string) {
+    if (text === WIZARD_DUE_NONE || text.trim().toLowerCase() === 'sin fecha') {
+      return null;
+    }
+
+    const user = await this.usersService.requireActiveUser(userId);
+    const timezone = this.usersService.resolveTimezone(user);
+    const interpretation = await this.aiService.interpretMessage(
+      `Tarea: placeholder. Fecha: ${text}`,
+      {
+        timezone,
+        currentDateTimeIso:
+          DateTime.now().setZone(timezone).toISO() ?? undefined,
+      },
+    );
+
+    return this.normalizeDueDate(interpretation.dueDate);
+  }
+
+  private parseWizardScope(text: string) {
+    const lowered = text.trim().toLowerCase();
+    if (lowered === 'personal') {
+      return TaskScope.PERSONAL;
+    }
+
+    if (lowered === 'familiar') {
+      return TaskScope.FAMILY;
+    }
+
+    return null;
+  }
+
+  private parseWizardPriority(text: string) {
+    const lowered = text.trim().toLowerCase();
+    if (lowered === 'alta') {
+      return Priority.HIGH;
+    }
+
+    if (lowered === 'media') {
+      return Priority.MEDIUM;
+    }
+
+    if (lowered === 'baja') {
+      return Priority.LOW;
+    }
+
+    return null;
+  }
+
+  private formatTaskDraftSummary(draft: {
+    title?: string;
+    scope?: TaskScope;
+    dueDate?: string | null;
+    dueDateInput?: string | null;
+    priority?: Priority;
+  }) {
+    const timezone = this.configService.get<string>(
+      'DEFAULT_TIMEZONE',
+      'America/Santiago',
+    );
+    const dueDate = draft.dueDate
+      ? DateTime.fromISO(draft.dueDate)
+          .setZone(timezone)
+          .toFormat('yyyy-LL-dd HH:mm')
+      : 'Sin fecha';
+    const scope = draft.scope === TaskScope.FAMILY ? 'Familiar' : 'Personal';
+    const priority =
+      draft.priority === Priority.HIGH
+        ? 'Alta'
+        : draft.priority === Priority.LOW
+          ? 'Baja'
+          : 'Media';
+
+    return [
+      'Resumen de la tarea',
+      `Titulo: ${draft.title ?? '-'}`,
+      `Tipo: ${scope}`,
+      `Vence: ${dueDate}`,
+      `Prioridad: ${priority}`,
+    ].join('\n');
+  }
+
+  private async getDefaultReplyMarkup(ctx: BotReplyContext) {
+    const user = await this.usersService.findByTelegramUserId(
+      String(ctx.from.id),
+    );
+    if (!user) {
+      return undefined;
+    }
+
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (pendingAction?.type === 'CREATE_TASK_WIZARD') {
+      switch (pendingAction.step) {
+        case 'SCOPE':
+          return this.wizardScopeKeyboard;
+        case 'DUE_DATE':
+          return this.wizardDueDateKeyboard;
+        case 'PRIORITY':
+          return this.wizardPriorityKeyboard;
+        case 'CONFIRM':
+          return this.wizardConfirmKeyboard;
+        default:
+          break;
+      }
+    }
+
+    return this.mainMenuKeyboard;
+  }
+
+  private get mainMenuKeyboard() {
+    return Markup.keyboard([
+      [MENU_NEW_TASK, MENU_PENDING],
+      [MENU_TODAY, MENU_FAMILY],
+      [MENU_COMPLETED, MENU_HELP],
+    ]).resize();
+  }
+
+  private get wizardScopeKeyboard() {
+    return Markup.keyboard([
+      [WIZARD_SCOPE_PERSONAL, WIZARD_SCOPE_FAMILY],
+      [MENU_CANCEL],
+    ])
+      .oneTime()
+      .resize();
+  }
+
+  private get wizardDueDateKeyboard() {
+    return Markup.keyboard([[WIZARD_DUE_NONE], [MENU_CANCEL]])
+      .oneTime()
+      .resize();
+  }
+
+  private get wizardPriorityKeyboard() {
+    return Markup.keyboard([
+      [WIZARD_PRIORITY_HIGH, WIZARD_PRIORITY_MEDIUM, WIZARD_PRIORITY_LOW],
+      [MENU_CANCEL],
+    ])
+      .oneTime()
+      .resize();
+  }
+
+  private get wizardConfirmKeyboard() {
+    return Markup.keyboard([[WIZARD_CONFIRM_CREATE], [MENU_CANCEL]])
+      .oneTime()
+      .resize();
+  }
+
+  private async syncBotCommands() {
+    if (!this.bot) {
+      return;
+    }
+
+    await this.bot.telegram.setMyCommands([
+      { command: 'start', description: 'Iniciar o vincular tu cuenta' },
+      { command: 'nueva', description: 'Crear una tarea guiada' },
+      { command: 'pendientes', description: 'Ver tareas pendientes' },
+      { command: 'hoy', description: 'Ver tareas de hoy' },
+      { command: 'familiares', description: 'Ver tareas familiares' },
+      { command: 'listas', description: 'Ver tareas completadas' },
+      { command: 'ayuda', description: 'Ver ayuda y ejemplos' },
+    ]);
+  }
+
   private get helpMessage() {
     return [
       'Comandos disponibles:',
       '/start',
       '/ayuda',
+      '/nueva',
       '/crearusuario Nombre +56912345678',
       '/hoy',
       '/pendientes',
@@ -602,6 +942,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/familiares',
       '/hecho 2',
       '/eliminar 2',
+      '',
+      'Tambien puedes usar el menu persistente para crear y listar tareas.',
       '',
       'Tambien puedes escribir mensajes como:',
       'Comprar pan manana',
