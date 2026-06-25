@@ -58,7 +58,7 @@ export class AiService {
         context?.currentDateTimeIso || DateTime.now().setZone(timezone).toISO();
 
       const response = await this.client.responses.create({
-        model: this.configService.get<string>('OPENAI_MODEL', 'gpt-5.5'),
+        model: this.configService.get<string>('OPENAI_MODEL', 'gpt-5.4-mini'),
         input: [
           {
             role: 'system',

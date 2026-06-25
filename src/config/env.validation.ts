@@ -12,7 +12,7 @@ const envSchema = z.object({
       'postgresql://postgres:postgres@localhost:5432/bot_asistente_familiar?schema=public',
     ),
   OPENAI_API_KEY: z.string().optional(),
-  OPENAI_MODEL: z.string().default('gpt-5.5'),
+  OPENAI_MODEL: z.string().default('gpt-5.4-mini'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),

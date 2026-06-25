@@ -20,7 +20,7 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: OPENAI_MODEL
-        value: gpt-5.5
+        value: gpt-5.4-mini
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
