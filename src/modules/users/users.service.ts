@@ -250,6 +250,24 @@ export class UsersService {
     return user;
   }
 
+  async updateReminderMinutesBefore(userId: string, reminderMinutesBefore: number | null) {
+    const user = await this.requireActiveUser(userId);
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        reminderMinutesBefore,
+      },
+      include: {
+        family: {
+          include: {
+            settings: true,
+          },
+        },
+      },
+    });
+  }
+
   async getUsersEligibleForBriefing() {
     return this.prisma.user.findMany({
       where: {
@@ -278,6 +296,18 @@ export class UsersService {
       user.family.settings?.dailyBriefingTime ||
       this.defaultBriefingTime
     );
+  }
+
+  resolveReminderMinutesBefore(user: UserWithSettings) {
+    if (user.reminderMinutesBefore != null) {
+      return user.reminderMinutesBefore;
+    }
+
+    if (user.family.settings?.reminderMinutesBefore != null) {
+      return user.family.settings.reminderMinutesBefore;
+    }
+
+    return this.configService.get<number>('REMINDER_MINUTES_BEFORE', 30);
   }
 
   isBriefingDueNow(user: UserWithSettings, nowUtc = DateTime.utc()) {

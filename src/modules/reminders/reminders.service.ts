@@ -17,7 +17,7 @@ export class RemindersService {
 
   @Cron('* * * * *')
   async processReminders() {
-    const reminderMinutesBefore = this.configService.get<number>(
+    const globalReminderMinutesBefore = this.configService.get<number>(
       'REMINDER_MINUTES_BEFORE',
       30,
     );
@@ -25,18 +25,43 @@ export class RemindersService {
       'REMINDER_OVERDUE_GRACE_MINUTES',
       30,
     );
+    const maxReminderMinutesBefore =
+      await this.tasksService.getMaxReminderMinutesBefore(
+        globalReminderMinutesBefore,
+      );
     const tasks = await this.tasksService.getTasksDueForReminder(
-      reminderMinutesBefore,
+      maxReminderMinutesBefore,
       overdueGraceMinutes,
     );
     const now = DateTime.now();
+    let sentCount = 0;
 
     for (const task of tasks) {
       if (!task.assignedToUser?.telegramChatId) {
         continue;
       }
 
+      const reminderMinutesBefore =
+        this.tasksService.resolveReminderMinutesBeforeForTask(
+          task,
+          globalReminderMinutesBefore,
+        );
+      if (reminderMinutesBefore === 0 || !task.dueDate) {
+        continue;
+      }
+
       const dueDate = task.dueDate ? DateTime.fromJSDate(task.dueDate) : null;
+      const diffMinutes = dueDate
+        ? Math.round(dueDate.diff(now, 'minutes').minutes)
+        : null;
+      if (
+        diffMinutes == null ||
+        diffMinutes > reminderMinutesBefore ||
+        diffMinutes < -overdueGraceMinutes
+      ) {
+        continue;
+      }
+
       const message = buildReminderMessage(
         task.title,
         dueDate,
@@ -49,10 +74,11 @@ export class RemindersService {
         message,
       );
       await this.tasksService.markReminderSent(task.id);
+      sentCount += 1;
     }
 
-    if (tasks.length > 0) {
-      this.logger.log(`Recordatorios enviados: ${tasks.length}`);
+    if (sentCount > 0) {
+      this.logger.log(`Recordatorios enviados: ${sentCount}`);
     }
   }
 }

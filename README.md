@@ -25,6 +25,8 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Vista de detalle con `/ver N`
 - Notas por tarea con `/nota N`
 - Edicion contextual de tareas con `/editar`
+- Alertas configurables por usuario con `/alertas`
+- Override de alertas por tarea desde el editor contextual
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
 - Recordatorios automaticos
 - Briefing diario sin duplicados
@@ -78,7 +80,8 @@ La API HTTP queda en `http://localhost:3000`:
 - `/completadas`
 - `/ver 2`
 - `/nota 2`
-- `/editar 2`
+- `/alertas`
+- `/editar`
 - `/hecho 2`
 - `/eliminar 2`
 
@@ -92,35 +95,43 @@ La API HTTP queda en `http://localhost:3000`:
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
 - La lista de pendientes muestra acciones contextuales para `Completar varias`, `Editar` y `Eliminar varias`
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
-- La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora` y `Nota` desde menus contextuales
+- La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora`, `Nota` y `Alerta` desde menus contextuales
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
+- `/alertas` permite definir la anticipacion predeterminada de recordatorios por usuario
+- Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
+- `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
+- Al cerrar el editor, el bot muestra el estado final real de la tarea en vez de responder que la edicion fue cancelada
+- El bot usa jerarquia visual con `bold` en encabezados, preguntas, etiquetas y numeracion; el contenido de la tarea queda en texto regular
 - Si envias solo `/hecho`, `/eliminar` o `/ver` sin indice, el bot responde con una guia corta del formato esperado
+
+### Resolucion de alertas
+
+El sistema resuelve la anticipacion de recordatorios en este orden:
+
+1. `Task.reminderMinutesBefore` como override por tarea
+2. `User.reminderMinutesBefore` como preferencia predeterminada del usuario
+3. `Settings.reminderMinutesBefore` como fallback familiar
+4. `REMINDER_MINUTES_BEFORE` como fallback global
+
+Comportamiento actual:
+
+- si una tarea define su propia alerta, esa configuracion gana
+- si la tarea no define alerta, hereda la del usuario
+- si el usuario tampoco define alerta, se usa la familiar
+- si no existe configuracion familiar, se usa la variable global
+- el valor `0` significa `Sin recordatorio`
 
 ### Siguiente paso propuesto
 
-Configuracion de alertas por usuario y opcionalmente por tarea:
+Configuracion avanzada de alertas y modelado de subtareas:
 
-- nivel 1: `Task.reminderMinutesBefore` como override por tarea
-- nivel 2: `User.reminderMinutesBefore` como preferencia por defecto del usuario
-- nivel 3: `Settings.reminderMinutesBefore` como fallback familiar
-- nivel 4: `REMINDER_MINUTES_BEFORE` como fallback global
-
-Orden de resolucion recomendado:
-
-1. valor configurado en la tarea
-2. valor configurado en el usuario
-3. valor configurado en la familia
-4. valor global por entorno
-
-Objetivo:
-
-- permitir que cada usuario defina con cuanta anticipacion quiere sus recordatorios
-- permitir excepciones por tarea cuando haga falta
-- mantener compatibilidad con la configuracion global actual
+- presets y texto mas explicito para alertas por tarea segun contexto de vencimiento
+- futura preferencia separada para briefing diario y recordatorios de tareas
+- subtareas como entidad independiente, no embebida en `description`
 
 ### Ejemplos de lenguaje natural
 
-- `Comprar pan manana`
+- `Comprar pan mañana`
 - `Tarea familiar: pagar cuentas`
 - `Preparar presentacion Porsche el viernes`
 
@@ -230,3 +241,4 @@ npm run start:dev
 - Una cuenta de Telegram pertenece a una sola familia
 - Las notas de tareas usan el campo `description` del modelo `Task`
 - La edicion contextual actual de tareas usa menus inline y texto libre solo cuando el usuario debe ingresar un nuevo valor
+- La presentacion del bot en Telegram usa `parse_mode=HTML` para aplicar negritas sin alterar el contenido real de tareas y notas

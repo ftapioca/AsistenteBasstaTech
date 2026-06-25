@@ -6,6 +6,7 @@ import {
 import {
   Prisma,
   Priority,
+  Settings,
   Task,
   TaskScope,
   TaskStatus,
@@ -18,6 +19,13 @@ import { UsersService } from '../users/users.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 
 type ActiveUser = NonNullable<Awaited<ReturnType<UsersService['findById']>>>;
+type TaskWithReminderContext = Task & {
+  assignedToUser: (User & {
+    family: {
+      settings: Settings | null;
+    };
+  }) | null;
+};
 type PendingAction =
   | {
       type: 'CREATE_TASK_CONFIRMATION';
@@ -78,6 +86,7 @@ export class TasksService {
         priority: dto.priority ?? Priority.MEDIUM,
         scope: dto.scope,
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+        reminderMinutesBefore: dto.reminderMinutesBefore ?? null,
       },
     });
   }
@@ -337,6 +346,31 @@ export class TasksService {
     });
   }
 
+  async updateTaskReminderMinutesBefore(
+    userId: string,
+    taskId: string,
+    reminderMinutesBefore: number | null,
+  ) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        reminderMinutesBefore,
+        reminderSent: false,
+      },
+    });
+  }
+
   async updateTaskDescription(
     userId: string,
     taskId: string,
@@ -419,13 +453,13 @@ export class TasksService {
   }
 
   async getTasksDueForReminder(
-    reminderMinutesBefore: number,
+    maxReminderMinutesBefore: number,
     overdueGraceMinutes = 0,
   ) {
     const now = DateTime.now();
     const lowerBound = now.minus({ minutes: overdueGraceMinutes }).toJSDate();
     const limit = now
-      .plus({ minutes: reminderMinutesBefore })
+      .plus({ minutes: maxReminderMinutesBefore })
       .toJSDate();
 
     return this.prisma.task.findMany({
@@ -438,9 +472,63 @@ export class TasksService {
         },
       },
       include: {
-        assignedToUser: true,
+        assignedToUser: {
+          include: {
+            family: {
+              include: {
+                settings: true,
+              },
+            },
+          },
+        },
       },
     });
+  }
+
+  async getMaxReminderMinutesBefore(globalReminderMinutesBefore: number) {
+    const [taskMax, userMax, familyMax] = await Promise.all([
+      this.prisma.task.aggregate({
+        _max: {
+          reminderMinutesBefore: true,
+        },
+      }),
+      this.prisma.user.aggregate({
+        _max: {
+          reminderMinutesBefore: true,
+        },
+      }),
+      this.prisma.settings.aggregate({
+        _max: {
+          reminderMinutesBefore: true,
+        },
+      }),
+    ]);
+
+    return Math.max(
+      globalReminderMinutesBefore,
+      taskMax._max.reminderMinutesBefore ?? 0,
+      userMax._max.reminderMinutesBefore ?? 0,
+      familyMax._max.reminderMinutesBefore ?? 0,
+    );
+  }
+
+  resolveReminderMinutesBeforeForTask(
+    task: TaskWithReminderContext,
+    globalReminderMinutesBefore: number,
+  ) {
+    if (task.reminderMinutesBefore != null) {
+      return task.reminderMinutesBefore;
+    }
+
+    if (task.assignedToUser?.reminderMinutesBefore != null) {
+      return task.assignedToUser.reminderMinutesBefore;
+    }
+
+    if (task.assignedToUser?.family.settings?.reminderMinutesBefore != null) {
+      return task.assignedToUser.family.settings.reminderMinutesBefore;
+    }
+
+    return globalReminderMinutesBefore;
   }
 
   async markReminderSent(taskId: string) {

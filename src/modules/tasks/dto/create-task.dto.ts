@@ -1,6 +1,8 @@
 import {
+  IsInt,
   IsDateString,
   IsEnum,
+  Min,
   IsOptional,
   IsString,
   MaxLength,
@@ -26,4 +28,9 @@ export class CreateTaskDto {
   @IsOptional()
   @IsDateString()
   dueDate?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  reminderMinutesBefore?: number | null;
 }

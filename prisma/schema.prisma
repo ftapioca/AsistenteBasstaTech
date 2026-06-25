@@ -26,6 +26,7 @@ model User {
   telegramChatId    String?            @unique
   telegramUsername  String?
   role              UserRole           @default(USER)
+  reminderMinutesBefore Int?
   timezone          String
   dailyBriefingTime String
   isActive          Boolean            @default(true)
@@ -48,6 +49,7 @@ model Task {
   priority         Priority    @default(MEDIUM)
   scope            TaskScope
   dueDate          DateTime?
+  reminderMinutesBefore Int?
   reminderSent     Boolean     @default(false)
   completedAt      DateTime?
   createdAt        DateTime    @default(now())
