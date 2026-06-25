@@ -23,6 +23,8 @@ services:
         value: gpt-5.5
       - key: TELEGRAM_BOT_TOKEN
         sync: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
       - key: DEFAULT_TIMEZONE
         value: America/Santiago
       - key: DEFAULT_DAILY_BRIEFING_TIME

@@ -4,12 +4,14 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Priority, TaskScope, UserRole } from '@prisma/client';
 import { DateTime } from 'luxon';
 import { Markup, Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
+import { Update } from 'telegraf/types';
 import { validateDto } from '../../common/dto.utils';
 import { AiService } from '../ai/ai.service';
 import { CreateTaskDto } from '../tasks/dto/create-task.dto';
@@ -50,10 +52,13 @@ type BotContactContext = BotReplyContext & {
   };
 };
 
+const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
+
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TelegramService.name);
   private bot?: Telegraf;
+  private transportMode: 'polling' | 'webhook' | null = null;
 
   constructor(
     private readonly configService: ConfigService,
@@ -71,20 +76,23 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     this.bot = new Telegraf(token);
     this.registerHandlers();
-    void this.bot
-      .launch()
-      .then(() => {
-        this.logger.log('Telegram bot iniciado.');
-      })
-      .catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : 'Error desconocido';
-        this.logger.error(`No se pudo iniciar Telegram: ${message}`);
-      });
+
+    const webhookBaseUrl =
+      this.configService.get<string>('TELEGRAM_WEBHOOK_URL') ||
+      this.configService.get<string>('RENDER_EXTERNAL_URL');
+
+    if (webhookBaseUrl) {
+      this.transportMode = 'webhook';
+      void this.configureWebhook(webhookBaseUrl);
+      return;
+    }
+
+    this.transportMode = 'polling';
+    void this.startPolling();
   }
 
   onModuleDestroy() {
-    if (!this.bot) {
+    if (!this.bot || this.transportMode !== 'polling') {
       return;
     }
 
@@ -103,6 +111,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.bot.telegram.sendMessage(chatId, text);
+  }
+
+  async handleWebhookUpdate(update: Update, secretToken?: string) {
+    if (!this.bot) {
+      return;
+    }
+
+    const expectedSecret = this.configService.get<string>(
+      'TELEGRAM_WEBHOOK_SECRET',
+    );
+    if (expectedSecret && secretToken !== expectedSecret) {
+      throw new UnauthorizedException('Invalid Telegram webhook secret.');
+    }
+
+    await this.bot.handleUpdate(update);
   }
 
   private registerHandlers() {
@@ -177,6 +200,48 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       await this.safeReply(typedCtx, this.handleNaturalLanguage(typedCtx));
     });
+  }
+
+  private async startPolling() {
+    if (!this.bot) {
+      return;
+    }
+
+    try {
+      await this.bot.telegram.deleteWebhook({
+        drop_pending_updates: false,
+      });
+      await this.bot.launch();
+      this.logger.log('Telegram bot iniciado en polling.');
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.error(`No se pudo iniciar Telegram: ${message}`);
+    }
+  }
+
+  private async configureWebhook(baseUrl: string) {
+    if (!this.bot) {
+      return;
+    }
+
+    try {
+      const expectedSecret = this.configService.get<string>(
+        'TELEGRAM_WEBHOOK_SECRET',
+      );
+      const webhookUrl = `${baseUrl.replace(/\/$/, '')}${TELEGRAM_WEBHOOK_PATH}`;
+
+      await this.bot.telegram.setWebhook(webhookUrl, {
+        drop_pending_updates: false,
+        secret_token: expectedSecret,
+      });
+
+      this.logger.log(`Telegram bot iniciado en webhook: ${webhookUrl}`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.error(`No se pudo iniciar Telegram: ${message}`);
+    }
   }
 
   private async handleStart(ctx: BotReplyContext) {
