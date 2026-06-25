@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Priority, TaskScope } from '@prisma/client';
+import { DateTime } from 'luxon';
 import OpenAI from 'openai';
 import { z } from 'zod';
 import { AiInterpretation } from './ai.types';
@@ -41,12 +42,21 @@ export class AiService {
     }
   }
 
-  async interpretMessage(message: string): Promise<AiInterpretation> {
+  async interpretMessage(
+    message: string,
+    context?: { timezone?: string; currentDateTimeIso?: string },
+  ): Promise<AiInterpretation> {
     if (!this.client) {
       return this.heuristicInterpretation(message);
     }
 
     try {
+      const timezone =
+        context?.timezone ||
+        this.configService.get<string>('DEFAULT_TIMEZONE', 'America/Santiago');
+      const currentDateTimeIso =
+        context?.currentDateTimeIso || DateTime.now().setZone(timezone).toISO();
+
       const response = await this.client.responses.create({
         model: this.configService.get<string>('OPENAI_MODEL', 'gpt-5.5'),
         input: [
@@ -55,7 +65,19 @@ export class AiService {
             content: [
               {
                 type: 'input_text',
-                text: 'Eres un parser de intenciones para un bot familiar de tareas. Responde solo JSON valido. No ejecutes acciones. Usa intent=UNKNOWN si falta certeza. Si entregas dueDate, debe ser una fecha ISO 8601 completa con zona horaria. Si no puedes determinarla con certeza, usa null.',
+                text: [
+                  'Eres un parser de intenciones para un bot familiar de tareas.',
+                  'Responde solo JSON valido. No ejecutes acciones.',
+                  'Usa intent=UNKNOWN si falta certeza.',
+                  `Zona horaria de referencia: ${timezone}.`,
+                  `Fecha/hora actual de referencia: ${currentDateTimeIso}.`,
+                  'Si entregas dueDate, debe ser una fecha ISO 8601 completa con zona horaria.',
+                  'Debes resolver expresiones relativas en espanol como "manana", "el viernes", "en la tarde", "a las 18:00" usando la fecha de referencia.',
+                  'Si dices "en la tarde" y no hay hora exacta, usa 15:00:00.',
+                  'Si la prioridad esta explicita como alta/media/baja, mapearla a HIGH/MEDIUM/LOW.',
+                  'El title debe ser breve y limpio; no incluyas en el title fragmentos como "prioridad alta" o fechas si pueden ir estructurados.',
+                  'Si no puedes determinar la fecha con certeza, usa dueDate=null.',
+                ].join(' '),
               },
             ],
           },

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Priority, TaskScope, UserRole } from '@prisma/client';
+import { DateTime } from 'luxon';
 import { Markup, Telegraf } from 'telegraf';
 import { message } from 'telegraf/filters';
 import { validateDto } from '../../common/dto.utils';
@@ -296,8 +297,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
+    const timezone = this.usersService.resolveTimezone(user);
     const interpretation = await this.aiService.interpretMessage(
       ctx.message.text,
+      {
+        timezone,
+        currentDateTimeIso:
+          DateTime.now().setZone(timezone).toISO() ?? undefined,
+      },
     );
 
     switch (interpretation.intent) {
@@ -366,7 +373,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private formatTaskList(
     title: string,
-    tasks: { title: string; dueDate: Date | null; scope: TaskScope }[],
+    tasks: {
+      title: string;
+      dueDate: Date | null;
+      scope: TaskScope;
+      priority?: Priority;
+    }[],
   ) {
     if (tasks.length === 0) {
       return `${title}\n\nNo hay tareas.`;
@@ -377,7 +389,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? ` - vence ${task.dueDate.toISOString().slice(0, 16).replace('T', ' ')}`
         : '';
       const scope = task.scope === TaskScope.FAMILY ? ' [FAMILIAR]' : '';
-      return `${index + 1}. ${task.title}${scope}${due}`;
+      const priority =
+        task.priority && task.priority !== Priority.MEDIUM
+          ? ` [${task.priority}]`
+          : '';
+      return `${index + 1}. ${task.title}${scope}${priority}${due}`;
     });
 
     return `${title}\n\n${lines.join('\n')}`;
