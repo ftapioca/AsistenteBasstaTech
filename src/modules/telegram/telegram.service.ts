@@ -510,7 +510,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           tasks,
           this.usersService.resolveTimezone(user),
         ),
-        extra: this.buildEditSelectionKeyboard(tasks),
+        extra: this.withHtml(this.buildEditSelectionKeyboard(tasks)),
       };
     }
 
@@ -530,7 +530,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         task,
         this.usersService.resolveTimezone(user),
       ),
-      extra: this.buildEditTaskKeyboard(task),
+      extra: this.withHtml(this.buildEditTaskKeyboard(task)),
     };
   }
 
@@ -547,7 +547,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       index,
     );
 
-    return this.formatTaskDetail(task, this.usersService.resolveTimezone(user));
+    return {
+      text: this.formatTaskDetail(task, this.usersService.resolveTimezone(user)),
+      extra: this.withHtml(),
+    };
   }
 
   private async handleTaskNote(ctx: BotTextContext) {
@@ -601,7 +604,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         'Si quieres borrar la nota, usa el boton correspondiente o responde "Borrar".',
         'Si prefieres salir, responde "Cancelar".',
       ].join('\n'),
-      extra: this.buildEditNoteKeyboard(task),
+      extra: this.withHtml(this.buildEditNoteKeyboard(task)),
     };
   }
 
@@ -787,7 +790,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     return {
       text,
-      extra: Markup.inlineKeyboard([buttons]),
+      extra: this.withHtml(Markup.inlineKeyboard([buttons])),
     };
   }
 
@@ -813,9 +816,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (listType === 'today' || listType === 'completed') {
       const lines = tasks.map(
         (task, index) =>
-          `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`,
+          `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`,
       );
-      return `${headings[listType]}\n\n${lines.join('\n')}`;
+      return `${this.bold(headings[listType])}\n\n${lines.join('\n')}`;
     }
 
     const now = DateTime.now().setZone(timezone);
@@ -824,7 +827,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const others: string[] = [];
 
     tasks.forEach((task, index) => {
-      const line = `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`;
+      const line = `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`;
       if (this.isTaskOverdue(task, timezone)) {
         overdue.push(line);
         return;
@@ -844,15 +847,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       others.push(line);
     });
 
-    const sections = [headings[listType]];
+    const sections = [this.bold(headings[listType])];
     if (overdue.length > 0) {
-      sections.push(`🚨 Tareas vencidas\n${overdue.join('\n')}`);
+      sections.push(`${this.bold('🚨 Tareas vencidas')}\n${overdue.join('\n')}`);
     }
     if (today.length > 0) {
-      sections.push(`🗓️ Hoy\n${today.join('\n')}`);
+      sections.push(`${this.bold('🗓️ Hoy')}\n${today.join('\n')}`);
     }
     if (others.length > 0) {
-      sections.push(`Otras tareas\n${others.join('\n')}`);
+      sections.push(`${this.bold('Otras tareas')}\n${others.join('\n')}`);
     }
 
     return sections.join('\n\n');
@@ -1235,6 +1238,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data.startsWith('edit:close:')) {
+      const taskId = data.replace('edit:close:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Cerrar',
+        clearMarkup: true,
+        reply: {
+          text: [
+            this.bold('Listo, la tarea quedo asi:'),
+            '',
+            this.formatTaskDetail(task, this.usersService.resolveTimezone(user)),
+          ].join('\n'),
+          extra: this.withHtml(),
+        },
+      };
+    }
+
     if (data === 'edit:back:list') {
       return this.startEditTaskSelection(ctx, user.id);
     }
@@ -1254,7 +1275,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           task,
           this.usersService.resolveTimezone(user),
         ),
-        editExtra: this.buildEditTaskKeyboard(task),
+        editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
       };
     }
 
@@ -1268,7 +1289,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           task,
           this.usersService.resolveTimezone(user),
         ),
-        editExtra: this.buildEditTaskKeyboard(task),
+        editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
       };
     }
 
@@ -1284,12 +1305,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return {
         answerText: 'Editar titulo',
         editText: [
-          `Editar titulo de "${task.title}"`,
+          this.bold(`Editar titulo de "${task.title}"`),
           '',
-          'Escribe el nuevo titulo.',
+          this.bold('Escribe el nuevo titulo.'),
           'Si prefieres salir, responde "Cancelar".',
         ].join('\n'),
-        editExtra: this.buildEditInputKeyboard(task.id),
+        editExtra: this.withHtml(this.buildEditInputKeyboard(task.id)),
       };
     }
 
@@ -1299,11 +1320,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return {
         answerText: 'Editar fecha',
         editText: [
-          `Editar fecha/hora de "${task.title}"`,
+          this.bold(`Editar fecha/hora de "${task.title}"`),
           '',
-          'Elige una opcion rapida o toca "Otro..." para escribir una fecha/hora personalizada.',
+          this.bold(
+            'Elige una opcion rapida o toca "Otro..." para escribir una fecha/hora personalizada.',
+          ),
         ].join('\n'),
-        editExtra: this.buildEditDueDateKeyboard(task.id),
+        editExtra: this.withHtml(this.buildEditDueDateKeyboard(task.id)),
       };
     }
 
@@ -1328,7 +1351,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           updatedTask,
           this.usersService.resolveTimezone(user),
         ),
-        editExtra: this.buildEditTaskKeyboard(updatedTask),
+        editExtra: this.withHtml(this.buildEditTaskKeyboard(updatedTask)),
       };
     }
 
@@ -1344,12 +1367,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return {
         answerText: 'Fecha personalizada',
         editText: [
-          `Editar fecha/hora de "${task.title}"`,
+          this.bold(`Editar fecha/hora de "${task.title}"`),
           '',
-          'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
+          this.bold('Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".'),
           'Si prefieres salir, responde "Cancelar".',
         ].join('\n'),
-        editExtra: this.buildEditDueDateKeyboard(task.id),
+        editExtra: this.withHtml(this.buildEditDueDateKeyboard(task.id)),
       };
     }
 
@@ -1365,16 +1388,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return {
         answerText: 'Editar nota',
         editText: [
-          `Editar nota de "${task.title}"`,
+          this.bold(`Editar nota de "${task.title}"`),
           '',
           task.description?.trim()
             ? `Nota actual:\n${task.description}`
             : 'Actualmente no tiene nota.',
           '',
-          'Escribe la nueva nota. Puede tener varias lineas.',
+          this.bold('Escribe la nueva nota. Puede tener varias lineas.'),
           'Si prefieres salir, responde "Cancelar".',
         ].join('\n'),
-        editExtra: this.buildEditNoteKeyboard(task),
+        editExtra: this.withHtml(this.buildEditNoteKeyboard(task)),
       };
     }
 
@@ -1393,7 +1416,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           task,
           this.usersService.resolveTimezone(user),
         ),
-        editExtra: this.buildEditTaskKeyboard(task),
+        editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
       };
     }
 
@@ -1753,7 +1776,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.tasksService.clearPendingAction(String(ctx.chat.id));
       return {
         text: [
-          'Listo. Actualice el titulo de la tarea.',
+          this.bold('Listo. Actualice el titulo de la tarea.'),
           '',
           this.formatEditTaskMenu(
             updatedTask,
@@ -1762,7 +1785,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             ),
           ),
         ].join('\n'),
-        extra: this.buildEditTaskKeyboard(updatedTask),
+        extra: this.withHtml(this.buildEditTaskKeyboard(updatedTask)),
       };
     }
 
@@ -1777,7 +1800,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       return {
         text: [
-          'Listo. Actualice la fecha/hora de la tarea.',
+          this.bold('Listo. Actualice la fecha/hora de la tarea.'),
           '',
           this.formatEditTaskMenu(
             updatedTask,
@@ -1786,7 +1809,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             ),
           ),
         ].join('\n'),
-        extra: this.buildEditTaskKeyboard(updatedTask),
+        extra: this.withHtml(this.buildEditTaskKeyboard(updatedTask)),
       };
     }
 
@@ -1804,8 +1827,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return {
       text: [
         description
-          ? 'Listo. Actualice la nota de la tarea.'
-          : 'Listo. Quite la nota de la tarea.',
+          ? this.bold('Listo. Actualice la nota de la tarea.')
+          : this.bold('Listo. Quite la nota de la tarea.'),
         '',
         this.formatEditTaskMenu(
           updatedTask,
@@ -1814,7 +1837,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           ),
         ),
       ].join('\n'),
-      extra: this.buildEditTaskKeyboard(updatedTask),
+      extra: this.withHtml(this.buildEditTaskKeyboard(updatedTask)),
     };
   }
 
@@ -1857,7 +1880,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           await this.usersService.requireActiveUser(userId),
         ),
       ),
-      extra: this.buildEditTaskKeyboard(task),
+      extra: this.withHtml(this.buildEditTaskKeyboard(task)),
     };
   }
 
@@ -2253,15 +2276,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       : 'sin fecha';
 
     return [
-      'Detalle de tarea',
-      `Titulo: ${task.title}`,
-      `Tipo: ${this.formatScopeLabel(task.scope)}`,
-      `Vence: ${due}`,
-      `Prioridad: ${this.formatPriorityLabel(task.priority ?? Priority.MEDIUM)}`,
+      this.bold('Detalle de tarea'),
+      `${this.bold('Titulo:')} ${this.escapeHtml(task.title)}`,
+      `${this.bold('Tipo:')} ${this.escapeHtml(this.formatScopeLabel(task.scope))}`,
+      `${this.bold('Vence:')} ${this.escapeHtml(due)}`,
+      `${this.bold('Prioridad:')} ${this.escapeHtml(
+        this.formatPriorityLabel(task.priority ?? Priority.MEDIUM),
+      )}`,
       '',
-      'Nota:',
-      task.description?.trim() || 'Sin nota.',
+      this.bold('Nota:'),
+      this.escapeHtml(task.description?.trim() || 'Sin nota.'),
     ].join('\n');
+  }
+
+  private withHtml(extra?: unknown) {
+    return Object.assign(
+      {
+        parse_mode: 'HTML',
+      },
+      extra ?? {},
+    );
+  }
+
+  private bold(text: string) {
+    return `<b>${this.escapeHtml(text)}</b>`;
+  }
+
+  private escapeHtml(text: string) {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   private formatFamilyManagementText(
@@ -2408,15 +2453,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     timezone: string,
   ) {
     const lines = tasks.map(
-      (task, index) => `${index + 1}. ${this.formatTaskLine(task, timezone, false)}`,
+      (task, index) =>
+        `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`,
     );
 
     return [
-      '¿Que tarea quieres editar?',
+      this.bold('¿Que tarea quieres editar?'),
       '',
       lines.join('\n'),
       '',
-      'Puedes tocar una opcion o responder solo con el numero.',
+      this.bold('Puedes tocar una opcion o responder solo con el numero.'),
     ].join('\n');
   }
 
@@ -2441,12 +2487,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       : 'sin fecha';
 
     return [
-      'Editar tarea',
-      `Titulo: ${task.title}`,
-      `Vence: ${due}`,
-      `Nota: ${task.description?.trim() ? 'Sí' : 'No'}`,
+      this.bold('Editar tarea'),
+      `${this.bold('Titulo:')} ${this.escapeHtml(task.title)}`,
+      `${this.bold('Vence:')} ${this.escapeHtml(due)}`,
+      `${this.bold('Nota:')} ${task.description?.trim() ? 'Sí' : 'No'}`,
       '',
-      '¿Que quieres cambiar?',
+      this.bold('¿Que quieres cambiar?'),
     ].join('\n');
   }
 
@@ -2472,7 +2518,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ],
       [
         Markup.button.callback('⬅️ Cambiar tarea', 'edit:back:list'),
-        Markup.button.callback('Cerrar', CALLBACK_EDIT_CANCEL),
+        Markup.button.callback('Cerrar', `edit:close:${task.id}`),
       ],
     ]);
   }
