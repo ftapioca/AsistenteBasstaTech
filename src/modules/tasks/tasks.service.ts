@@ -18,6 +18,12 @@ import { UsersService } from '../users/users.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 
 type ActiveUser = NonNullable<Awaited<ReturnType<UsersService['findById']>>>;
+type PendingAction = {
+  type: 'CREATE_TASK_CONFIRMATION';
+  reason: 'AMBIGUOUS_DATE' | 'DUPLICATE_TASK';
+  dto: CreateTaskDto;
+  duplicateTaskTitle?: string;
+};
 
 @Injectable()
 export class TasksService {
@@ -41,6 +47,44 @@ export class TasksService {
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
       },
     });
+  }
+
+  async findObviousDuplicateTask(userId: string, dto: CreateTaskDto) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const title = normalizeTaskTitle(dto.title);
+    const dueDate = dto.dueDate ? new Date(dto.dueDate) : null;
+
+    const candidates = await this.prisma.task.findMany({
+      where: {
+        familyId: user.familyId,
+        status: TaskStatus.PENDING,
+        scope: dto.scope,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    return (
+      candidates.find((task) => {
+        if (normalizeTaskTitle(task.title) !== title) {
+          return false;
+        }
+
+        if ((task.dueDate === null) !== (dueDate === null)) {
+          return false;
+        }
+
+        if (!task.dueDate && !dueDate) {
+          return true;
+        }
+
+        return (
+          task.dueDate !== null &&
+          dueDate !== null &&
+          Math.abs(task.dueDate.getTime() - dueDate.getTime()) < 60_000
+        );
+      }) ?? null
+    );
   }
 
   async listTodayTasks(userId: string) {
@@ -109,9 +153,51 @@ export class TasksService {
       create: {
         chatId,
         taskIdsJson: JSON.stringify(tasks.map((task) => task.id)),
+        pendingActionJson: null,
       },
       update: {
         taskIdsJson: JSON.stringify(tasks.map((task) => task.id)),
+      },
+    });
+  }
+
+  async setPendingAction(chatId: string, pendingAction: PendingAction) {
+    return this.prisma.chatContext.upsert({
+      where: { chatId },
+      create: {
+        chatId,
+        taskIdsJson: '[]',
+        pendingActionJson: JSON.stringify(pendingAction),
+      },
+      update: {
+        pendingActionJson: JSON.stringify(pendingAction),
+      },
+    });
+  }
+
+  async getPendingAction(chatId: string): Promise<PendingAction | null> {
+    const context = await this.prisma.chatContext.findUnique({
+      where: { chatId },
+    });
+
+    if (!context?.pendingActionJson) {
+      return null;
+    }
+
+    const pendingActionJson = context.pendingActionJson;
+    return JSON.parse(pendingActionJson) as PendingAction;
+  }
+
+  async clearPendingAction(chatId: string) {
+    return this.prisma.chatContext.upsert({
+      where: { chatId },
+      create: {
+        chatId,
+        taskIdsJson: '[]',
+        pendingActionJson: null,
+      },
+      update: {
+        pendingActionJson: null,
       },
     });
   }
@@ -271,4 +357,8 @@ export class TasksService {
       ],
     };
   }
+}
+
+function normalizeTaskTitle(title: string) {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
 }

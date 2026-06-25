@@ -247,28 +247,44 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listTodayTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList('Tareas para hoy', tasks);
+    return this.formatTaskList(
+      'Tareas para hoy',
+      tasks,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListPending(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listPendingTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList('Tareas pendientes', tasks);
+    return this.formatTaskList(
+      'Tareas pendientes',
+      tasks,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListFamily(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listFamilyTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList('Tareas familiares', tasks);
+    return this.formatTaskList(
+      'Tareas familiares',
+      tasks,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListCompleted(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listCompletedTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.formatTaskList('Tareas completadas', tasks);
+    return this.formatTaskList(
+      'Tareas completadas',
+      tasks,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleComplete(ctx: BotTextContext) {
@@ -297,6 +313,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
+    const confirmationReply = await this.tryHandlePendingConfirmation(
+      ctx,
+      user.id,
+    );
+    if (confirmationReply) {
+      return confirmationReply;
+    }
+
     const timezone = this.usersService.resolveTimezone(user);
     const interpretation = await this.aiService.interpretMessage(
       ctx.message.text,
@@ -351,6 +375,34 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           priority: interpretation.priority ?? Priority.MEDIUM,
           dueDate: normalizedDueDate,
         });
+
+        const ambiguity = this.detectTaskAmbiguity(
+          ctx.message.text,
+          normalizedDueDate,
+        );
+        if (ambiguity) {
+          await this.tasksService.setPendingAction(String(ctx.chat.id), {
+            type: 'CREATE_TASK_CONFIRMATION',
+            reason: 'AMBIGUOUS_DATE',
+            dto,
+          });
+          return `No pude determinar una fecha exacta para "${dto.title}". ¿Quieres crearla sin fecha? Responde si o no.`;
+        }
+
+        const duplicateTask = await this.tasksService.findObviousDuplicateTask(
+          user.id,
+          dto,
+        );
+        if (duplicateTask) {
+          await this.tasksService.setPendingAction(String(ctx.chat.id), {
+            type: 'CREATE_TASK_CONFIRMATION',
+            reason: 'DUPLICATE_TASK',
+            dto,
+            duplicateTaskTitle: duplicateTask.title,
+          });
+          return `Ya existe una tarea pendiente muy parecida: "${duplicateTask.title}". ¿Quieres crear otra igual? Responde si o no.`;
+        }
+
         const task = await this.tasksService.createTaskForUser(user.id, dto);
         return `Tarea creada: ${task.title}`;
       }
@@ -379,6 +431,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       scope: TaskScope;
       priority?: Priority;
     }[],
+    timezone = this.configService.get<string>(
+      'DEFAULT_TIMEZONE',
+      'America/Santiago',
+    ),
   ) {
     if (tasks.length === 0) {
       return `${title}\n\nNo hay tareas.`;
@@ -386,7 +442,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const lines = tasks.map((task, index) => {
       const due = task.dueDate
-        ? ` - vence ${task.dueDate.toISOString().slice(0, 16).replace('T', ' ')}`
+        ? ` - vence ${DateTime.fromJSDate(task.dueDate).setZone(timezone).toFormat('yyyy-LL-dd HH:mm')}`
         : '';
       const scope = task.scope === TaskScope.FAMILY ? ' [FAMILIAR]' : '';
       const priority =
@@ -422,6 +478,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return parsed.toISOString();
+  }
+
+  private detectTaskAmbiguity(message: string, dueDate: string | null) {
+    if (dueDate) {
+      return false;
+    }
+
+    const lowered = message.toLowerCase();
+    return /(lunes|martes|miercoles|miércoles|jueves|viernes|sabado|sábado|domingo|pasado mañana|fin de semana|en la tarde|en la mañana|en la noche|a las \d{1,2})/.test(
+      lowered,
+    );
+  }
+
+  private async tryHandlePendingConfirmation(
+    ctx: BotTextContext,
+    userId: string,
+  ) {
+    const text = ctx.message.text.trim().toLowerCase();
+    if (!['si', 'sí', 'no', 'cancelar'].includes(text)) {
+      return null;
+    }
+
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction) {
+      return null;
+    }
+
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+    if (text === 'no' || text === 'cancelar') {
+      return 'Operacion cancelada.';
+    }
+
+    const task = await this.tasksService.createTaskForUser(
+      userId,
+      pendingAction.dto,
+    );
+
+    if (pendingAction.reason === 'AMBIGUOUS_DATE') {
+      return `Tarea creada sin fecha: ${task.title}`;
+    }
+
+    return `Tarea duplicada creada: ${task.title}`;
   }
 
   private get helpMessage() {

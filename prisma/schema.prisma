@@ -77,10 +77,11 @@ model DailyBriefingLog {
 }
 
 model ChatContext {
-  id         String   @id @default(uuid())
-  chatId     String   @unique
-  taskIdsJson String
-  updatedAt  DateTime @updatedAt
+  id                String   @id @default(uuid())
+  chatId            String   @unique
+  taskIdsJson       String
+  pendingActionJson String?
+  updatedAt         DateTime @updatedAt
 }
 
 enum UserRole {
