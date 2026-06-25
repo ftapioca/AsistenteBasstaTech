@@ -29,7 +29,11 @@ services:
         value: America/Santiago
       - key: DEFAULT_DAILY_BRIEFING_TIME
         value: 08:30
+      - key: DAILY_BRIEFING_GRACE_MINUTES
+        value: "240"
       - key: REMINDER_MINUTES_BEFORE
+        value: "30"
+      - key: REMINDER_OVERDUE_GRACE_MINUTES
         value: "30"
 databases:
   - name: bot-asistente-familiar-db

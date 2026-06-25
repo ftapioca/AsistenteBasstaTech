@@ -40,7 +40,9 @@ Variables clave:
 - `DATABASE_URL`
 - `DEFAULT_TIMEZONE`
 - `DEFAULT_DAILY_BRIEFING_TIME`
+- `DAILY_BRIEFING_GRACE_MINUTES`
 - `REMINDER_MINUTES_BEFORE`
+- `REMINDER_OVERDUE_GRACE_MINUTES`
 
 Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear tareas.
 
@@ -68,6 +70,10 @@ La API HTTP queda en `http://localhost:3000`:
 - `/hoy`
 - `/pendientes`
 - `/familiares`
+- `/completadas`
+- `/ver 2`
+- `/nota 2`
+- `/editar 2`
 - `/hecho 2`
 - `/eliminar 2`
 
@@ -133,6 +139,31 @@ Verificacion despues del deploy:
 - abre `https://tu-servicio.onrender.com/health`
 - debe responder `{"status":"ok"}`
 - luego prueba el bot en Telegram con `/start`
+
+### Keepalive externo para Render Free
+
+Si mantienes el `Web Service` en `plan: free`, Render puede suspenderlo tras 15 minutos sin trafico entrante. Para evitar el cold start y reducir la perdida de jobs en memoria, configura un monitor externo que haga `GET` a:
+
+- `https://bot-asistente-familiar.onrender.com/health`
+
+Configuracion recomendada:
+
+- metodo: `GET`
+- intervalo: cada `10` a `14` minutos
+- timeout: `30` a `60` segundos
+- criterio de exito: HTTP `200`
+
+Notas:
+
+- un cron interno dentro de NestJS no sirve para despertar el servicio si Render ya lo durmio
+- este keepalive mantiene vivo el `web service`, pero sigue siendo una mitigacion operativa, no una garantia fuerte
+- el proyecto ya incluye una ventana de recuperacion para briefings y recordatorios si el servicio despierta tarde
+
+Servicios tipicos para esto:
+
+- UptimeRobot
+- Better Stack
+- cron-job.org
 
 Recomendacion:
 

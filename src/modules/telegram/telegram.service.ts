@@ -226,7 +226,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.safeReply(typedCtx, this.handleListPending(typedCtx));
     });
 
-    this.bot.command('listas', async (ctx) => {
+    this.bot.command('completadas', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       await this.safeReply(typedCtx, this.handleListCompleted(typedCtx));
     });
@@ -234,6 +234,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.command('familiares', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       await this.safeReply(typedCtx, this.handleListFamily(typedCtx));
+    });
+
+    this.bot.command('ver', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.handleViewTask(typedCtx));
+    });
+
+    this.bot.command('nota', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.handleTaskNote(typedCtx));
+    });
+
+    this.bot.command('editar', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.handleEdit(typedCtx));
     });
 
     this.bot.command('hecho', async (ctx) => {
@@ -461,6 +476,103 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Elimine "${task.title}" de tu lista.`;
   }
 
+  private async handleEdit(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    const index = Number(ctx.message.text.replace('/editar', '').trim());
+    const task = await this.tasksService.getEditableTaskByIndex(
+      user.id,
+      String(ctx.chat.id),
+      index,
+    );
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'EDIT_TASK_WIZARD',
+      step: 'DUE_DATE',
+      taskId: task.id,
+      draft: {},
+    });
+
+    const timezone = this.usersService.resolveTimezone(user);
+    const currentDue = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+    const overdue =
+      task.dueDate &&
+      DateTime.fromJSDate(task.dueDate).setZone(timezone) <
+        DateTime.now().setZone(timezone)
+        ? '\n\nEsta tarea ya esta vencida.'
+        : '';
+
+    return [
+      `Vamos a editar "${task.title}".`,
+      `Vencimiento actual: ${currentDue}.${overdue}`,
+      '',
+      'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
+      'Si quieres quitar el vencimiento, responde "Sin fecha".',
+      'Si prefieres salir, responde "Cancelar".',
+    ].join('\n');
+  }
+
+  private async handleViewTask(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    const index = Number(ctx.message.text.replace('/ver', '').trim());
+    const task = await this.tasksService.getVisibleTaskByIndex(
+      user.id,
+      String(ctx.chat.id),
+      index,
+    );
+
+    return this.formatTaskDetail(task, this.usersService.resolveTimezone(user));
+  }
+
+  private async handleTaskNote(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    const raw = ctx.message.text.replace('/nota', '').trim();
+    const match = raw.match(/^(\d+)(?:\s+([\s\S]+))?$/);
+
+    if (!match) {
+      throw new BadRequestException(
+        'Formato invalido. Usa /nota N o /nota N texto.',
+      );
+    }
+
+    const index = Number(match[1]);
+    const inlineNote = match[2]?.trim();
+    const task = await this.tasksService.getEditableTaskByIndex(
+      user.id,
+      String(ctx.chat.id),
+      index,
+    );
+
+    if (inlineNote) {
+      const description = /^(borrar|eliminar|quitar)$/i.test(inlineNote)
+        ? null
+        : inlineNote;
+      const updatedTask = await this.tasksService.updateTaskDescription(
+        user.id,
+        task.id,
+        description,
+      );
+      return description
+        ? `Listo. Actualice la nota de "${updatedTask.title}".`
+        : `Listo. Quite la nota de "${updatedTask.title}".`;
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'TASK_NOTE_WIZARD',
+      taskId: task.id,
+    });
+
+    return [
+      `Vamos a editar la nota de "${task.title}".`,
+      task.description ? `Nota actual:\n${task.description}` : 'Actualmente no tiene nota.',
+      '',
+      'Escribe la nueva nota. Puede tener varias lineas.',
+      'Si quieres borrar la nota, responde "Borrar".',
+      'Si prefieres salir, responde "Cancelar".',
+    ].join('\n');
+  }
+
   private async handleFamilyManagement(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     if (user.role !== UserRole.FAMILY_ADMIN) {
@@ -496,6 +608,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
     if (wizardReply) {
       return wizardReply;
+    }
+
+    const editReply = await this.tryHandleEditTaskWizard(ctx, user.id);
+    if (editReply) {
+      return editReply;
+    }
+
+    const noteReply = await this.tryHandleTaskNoteWizard(ctx, user.id);
+    if (noteReply) {
+      return noteReply;
     }
 
     const confirmationReply = await this.tryHandlePendingConfirmation(
@@ -1292,6 +1414,112 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return this.handleWizardInput(ctx, userId, ctx.message.text.trim());
   }
 
+  private async tryHandleEditTaskWizard(
+    ctx: BotTextContext,
+    userId: string,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'EDIT_TASK_WIZARD') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancele la edicion de la tarea.';
+    }
+
+    if (pendingAction.step === 'DUE_DATE') {
+      const dueDate = await this.resolveWizardDueDate(text, userId);
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'EDIT_TASK_WIZARD',
+        step: 'CONFIRM',
+        taskId: pendingAction.taskId,
+        draft: {
+          dueDate,
+          dueDateInput: text,
+        },
+      });
+
+      return [
+        'Asi quedaria el nuevo vencimiento',
+        `Vence: ${
+          dueDate
+            ? DateTime.fromISO(dueDate)
+                .setZone(
+                  this.configService.get<string>(
+                    'DEFAULT_TIMEZONE',
+                    'America/Santiago',
+                  ),
+                )
+                .toFormat('yyyy-LL-dd HH:mm')
+            : 'Sin fecha'
+        }`,
+        '',
+        'Responde "Guardar" o "si" para confirmar.',
+      ].join('\n');
+    }
+
+    if (
+      lowered !== 'si' &&
+      lowered !== 'sí' &&
+      lowered !== 'guardar'
+    ) {
+      throw new BadRequestException(
+        'Responde "Guardar" o "si" para confirmar, o "Cancelar" para salir.',
+      );
+    }
+
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+    const updatedTask = await this.tasksService.updateTaskDueDate(
+      userId,
+      pendingAction.taskId,
+      pendingAction.draft.dueDate ?? null,
+    );
+    const user = await this.usersService.requireActiveUser(userId);
+
+    return `Listo. Actualice "${updatedTask.title}" para que venza ${updatedTask.dueDate ? this.formatDueLabel(updatedTask.dueDate, this.usersService.resolveTimezone(user)) : 'sin fecha'}.`;
+  }
+
+  private async tryHandleTaskNoteWizard(
+    ctx: BotTextContext,
+    userId: string,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'TASK_NOTE_WIZARD') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancele la edicion de la nota.';
+    }
+
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+    const description =
+      lowered === 'borrar' || lowered === 'eliminar' || lowered === 'quitar'
+        ? null
+        : ctx.message.text.trim();
+    const updatedTask = await this.tasksService.updateTaskDescription(
+      userId,
+      pendingAction.taskId,
+      description,
+    );
+
+    return description
+      ? `Listo. Actualice la nota de "${updatedTask.title}".`
+      : `Listo. Quite la nota de "${updatedTask.title}".`;
+  }
+
   private async handleWizardInput(
     ctx: BotReplyContext,
     userId: string,
@@ -1591,9 +1819,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       task.priority === Priority.HIGH
         ? ' con prioridad alta ‼️'
         : task.priority === Priority.MEDIUM
-          ? ' con prioridad media ⚠️'
+          ? ' con prioridad media ❕'
           : '';
     return `"${task.title}" ${scope}, ${due}${priority}.`;
+  }
+
+  private formatTaskDetail(
+    task: DisplayTask & { description?: string | null },
+    timezone: string,
+  ) {
+    const due = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+
+    return [
+      'Detalle de tarea',
+      `Titulo: ${task.title}`,
+      `Tipo: ${this.formatScopeLabel(task.scope)}`,
+      `Vence: ${due}`,
+      `Prioridad: ${this.formatPriorityLabel(task.priority ?? Priority.MEDIUM)}`,
+      '',
+      'Nota:',
+      task.description?.trim() || 'Sin nota.',
+    ].join('\n');
   }
 
   private formatFamilyManagementText(
@@ -1724,7 +1972,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     rows.push([
       Markup.button.callback(
-        mode === 'COMPLETE' ? '✅ Confirmar' : '🗑️ Confirmar',
+        mode === 'COMPLETE' ? '✅ Confirmar' : '🗑️ Eliminar',
         mode === 'COMPLETE'
           ? CALLBACK_BULK_CONFIRM_COMPLETE
           : CALLBACK_BULK_CONFIRM_DELETE,
@@ -1822,7 +2070,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'pendientes', description: 'Ver tareas pendientes' },
       { command: 'hoy', description: 'Ver tareas de hoy' },
       { command: 'familiares', description: 'Ver tareas familiares' },
-      { command: 'listas', description: 'Ver tareas completadas' },
+      { command: 'completadas', description: 'Ver tareas completadas' },
+      { command: 'ver', description: 'Ver detalle de una tarea' },
+      { command: 'nota', description: 'Agregar o editar nota de una tarea' },
+      { command: 'editar', description: 'Editar vencimiento de una tarea' },
       { command: 'ayuda', description: 'Ver ayuda y ejemplos' },
     ]);
   }
@@ -1845,7 +2096,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '4. Completar o eliminar varias tareas de una vez.',
       'Desde una lista reciente puedes usar los botones inline para seleccionar varias tareas.',
       '',
-      '5. Gestionar tu familia.',
+      '5. Ver detalle y nota de una tarea.',
+      'Usa /ver N para abrir una tarea de la ultima lista mostrada.',
+      '',
+      '6. Agregar o editar notas.',
+      'Usa /nota N para escribir una nota o pegar una lista larga en varias lineas.',
+      '',
+      '7. Editar el vencimiento de una tarea pendiente.',
+      'Usa /editar N despues de /pendientes, /hoy o /familiares.',
+      '',
+      '8. Gestionar tu familia.',
       'El administrador puede agregar y quitar miembros desde el bot.',
       '',
       '',
@@ -1863,8 +2123,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '/crearusuario Nombre +56912345678',
       '/hoy',
       '/pendientes',
-      '/listas',
+      '/completadas',
       '/familiares',
+      '/ver 2',
+      '/nota 2',
+      '/editar 2',
       '/hecho 2',
       '/eliminar 2',
     ].join('\n');

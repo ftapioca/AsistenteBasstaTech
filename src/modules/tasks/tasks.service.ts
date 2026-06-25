@@ -48,6 +48,19 @@ type PendingAction =
       draft: {
         name?: string;
       };
+    }
+  | {
+      type: 'EDIT_TASK_WIZARD';
+      step: 'DUE_DATE' | 'CONFIRM';
+      taskId: string;
+      draft: {
+        dueDate?: string | null;
+        dueDateInput?: string | null;
+      };
+    }
+  | {
+      type: 'TASK_NOTE_WIZARD';
+      taskId: string;
     };
 
 @Injectable()
@@ -260,6 +273,65 @@ export class TasksService {
     });
   }
 
+  async getEditableTaskByIndex(userId: string, chatId: string, index: number) {
+    const task = await this.resolveTaskFromContext(chatId, index);
+    const user = await this.usersService.requireActiveUser(userId);
+    this.assertCanEditTask(user, task);
+    return task;
+  }
+
+  async getVisibleTaskByIndex(userId: string, chatId: string, index: number) {
+    const task = await this.resolveTaskFromContext(chatId, index);
+    const user = await this.usersService.requireActiveUser(userId);
+    this.assertCanViewTask(user, task);
+    return task;
+  }
+
+  async updateTaskDueDate(userId: string, taskId: string, dueDate: string | null) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        dueDate: dueDate ? new Date(dueDate) : null,
+        reminderSent: false,
+      },
+    });
+  }
+
+  async updateTaskDescription(
+    userId: string,
+    taskId: string,
+    description: string | null,
+  ) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        description,
+      },
+    });
+  }
+
   async getTasksFromContext(chatId: string) {
     const taskIds = await this.getTaskIdsFromContext(chatId);
     if (taskIds.length === 0) {
@@ -317,9 +389,13 @@ export class TasksService {
     return tasks;
   }
 
-  async getTasksDueForReminder(reminderMinutesBefore: number) {
-    const now = new Date();
-    const limit = DateTime.now()
+  async getTasksDueForReminder(
+    reminderMinutesBefore: number,
+    overdueGraceMinutes = 0,
+  ) {
+    const now = DateTime.now();
+    const lowerBound = now.minus({ minutes: overdueGraceMinutes }).toJSDate();
+    const limit = now
       .plus({ minutes: reminderMinutesBefore })
       .toJSDate();
 
@@ -328,7 +404,7 @@ export class TasksService {
         status: TaskStatus.PENDING,
         reminderSent: false,
         dueDate: {
-          gte: now,
+          gte: lowerBound,
           lte: limit,
         },
       },
@@ -436,6 +512,58 @@ export class TasksService {
 
     if (task.createdByUserId !== user.id && task.assignedToUserId !== user.id) {
       throw new ForbiddenException('Solo puedes eliminar tus propias tareas.');
+    }
+  }
+
+  private assertCanEditTask(user: ActiveUser, task: Task) {
+    if (task.familyId !== user.familyId) {
+      throw new ForbiddenException(
+        'No puedes editar tareas de otra familia.',
+      );
+    }
+
+    if (task.status !== TaskStatus.PENDING) {
+      throw new BadRequestException(
+        'Solo puedes editar tareas pendientes.',
+      );
+    }
+
+    if (user.role === UserRole.FAMILY_ADMIN) {
+      return;
+    }
+
+    if (task.scope === TaskScope.FAMILY) {
+      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
+        return;
+      }
+
+      throw new ForbiddenException(
+        'Solo puedes editar tareas familiares creadas por ti o asignadas a ti.',
+      );
+    }
+
+    if (task.createdByUserId !== user.id && task.assignedToUserId !== user.id) {
+      throw new ForbiddenException('Solo puedes editar tus propias tareas.');
+    }
+  }
+
+  private assertCanViewTask(user: ActiveUser, task: Task) {
+    if (task.familyId !== user.familyId) {
+      throw new ForbiddenException(
+        'No puedes ver tareas de otra familia.',
+      );
+    }
+
+    if (user.role === UserRole.FAMILY_ADMIN) {
+      return;
+    }
+
+    if (
+      task.scope === TaskScope.PERSONAL &&
+      task.createdByUserId !== user.id &&
+      task.assignedToUserId !== user.id
+    ) {
+      throw new ForbiddenException('Solo puedes ver tus tareas personales.');
     }
   }
 

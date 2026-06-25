@@ -285,8 +285,21 @@ export class UsersService {
     const briefingTime = this.resolveDailyBriefingTime(user);
     const localNow = nowUtc.setZone(timezone);
     const [hour, minute] = briefingTime.split(':').map(Number);
+    const graceMinutes = this.configService.get<number>(
+      'DAILY_BRIEFING_GRACE_MINUTES',
+      240,
+    );
+    const scheduledAt = localNow.set({
+      hour,
+      minute,
+      second: 0,
+      millisecond: 0,
+    });
 
-    return localNow.hour === hour && localNow.minute === minute;
+    return (
+      localNow >= scheduledAt &&
+      localNow < scheduledAt.plus({ minutes: graceMinutes })
+    );
   }
 
   getLocalDate(user: UserWithSettings, nowUtc = DateTime.utc()) {
