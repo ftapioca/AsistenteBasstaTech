@@ -41,6 +41,13 @@ type PendingAction =
       mode: 'COMPLETE' | 'DELETE';
       taskIds: string[];
       selectedTaskIds: string[];
+    }
+  | {
+      type: 'ADD_MEMBER_WIZARD';
+      step: 'NAME' | 'CONTACT';
+      draft: {
+        name?: string;
+      };
     };
 
 @Injectable()

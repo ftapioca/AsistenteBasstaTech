@@ -81,7 +81,7 @@ type BulkCallbackResult = {
 };
 
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
-const MENU_NEW_TASK = '➕ Nueva tarea';
+const MENU_NEW_TASK = '📝 Nueva tarea';
 const MENU_PENDING = '📋 Pendientes';
 const MENU_EDIT_FAMILY = '👨‍👩‍👧 Editar familia';
 const MENU_HELP = '❓ Ayuda';
@@ -107,6 +107,7 @@ const CALLBACK_BULK_CANCEL = 'bulk:cancel';
 const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
 const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
+const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -347,6 +348,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleContact(ctx: BotContactContext) {
     const contact = ctx.message.contact;
+    const addMemberReply = await this.tryHandleAddMemberContact(ctx);
+    if (addMemberReply) {
+      return addMemberReply;
+    }
+
     if (contact.user_id && contact.user_id !== ctx.from.id) {
       throw new BadRequestException(
         'Debes compartir tu propio contacto para vincularte.',
@@ -480,6 +486,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const menuActionReply = await this.tryHandleMenuAction(ctx);
     if (menuActionReply) {
       return menuActionReply;
+    }
+
+    const addMemberReply = await this.tryHandleAddMemberWizardText(ctx);
+    if (addMemberReply) {
+      return addMemberReply;
     }
 
     const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
@@ -1034,10 +1045,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data === CALLBACK_FAMILY_CANCEL) {
       const members = await this.usersService.listManagedUsers(user.id);
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
       return {
         answerText: 'Cancelado',
         editText: this.formatFamilyManagementText(user.family.name, members),
         editExtra: this.buildFamilyManagementKeyboard(members),
+      };
+    }
+
+    if (data === CALLBACK_FAMILY_ADD_MEMBER) {
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'ADD_MEMBER_WIZARD',
+        step: 'NAME',
+        draft: {},
+      });
+      return {
+        answerText: 'Agregar miembro',
+        clearMarkup: true,
+        reply: [
+          'Vamos a agregar un miembro.',
+          '',
+          'Primero, escribe el nombre con el que quieres guardarlo.',
+          'Despues te pedire que compartas su contacto.',
+        ].join('\n'),
       };
     }
 
@@ -1084,6 +1114,71 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       answerText: undefined,
       clearMarkup: false,
     };
+  }
+
+  private async tryHandleAddMemberWizardText(
+    ctx: BotTextContext,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'ADD_MEMBER_WIZARD') {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancele la carga del nuevo miembro.';
+    }
+
+    if (pendingAction.step === 'NAME') {
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'ADD_MEMBER_WIZARD',
+        step: 'CONTACT',
+        draft: {
+          name: text,
+        },
+      });
+
+      return [
+        `Perfecto. Guardare a la persona como "${text}".`,
+        '',
+        'Ahora comparte su contacto desde Telegram para tomar el numero.',
+        'Si prefieres salir, responde "Cancelar".',
+      ].join('\n');
+    }
+
+    return 'Estoy esperando que compartas el contacto de esa persona.';
+  }
+
+  private async tryHandleAddMemberContact(
+    ctx: BotContactContext,
+  ): Promise<string | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'ADD_MEMBER_WIZARD') {
+      return null;
+    }
+
+    if (pendingAction.step !== 'CONTACT' || !pendingAction.draft.name) {
+      return null;
+    }
+
+    const admin = await this.requireRegisteredUser(ctx);
+    const createdUser = await this.usersService.createManagedUser(
+      admin.id,
+      validateDto(CreateUserDto, {
+        name: pendingAction.draft.name,
+        phoneNumber: ctx.message.contact.phone_number,
+      }),
+    );
+
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+    return `Listo. Agregue a ${createdUser.name} a la familia. Esa persona ya puede escribir /start y vincular su cuenta.`;
   }
 
   private async startBulkTaskAction(
@@ -1529,16 +1624,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private buildFamilyManagementKeyboard(
     members: { id: string; name: string }[],
   ) {
-    const rows = members.map((member) => [
-      Markup.button.callback(
-        `Quitar ${this.truncateTaskTitle(member.name, 20)}`,
-        `family:remove:${member.id}`,
-      ),
-    ]);
+    const rows = [
+      [
+        Markup.button.callback(
+          '🆕 Agregar miembro',
+          CALLBACK_FAMILY_ADD_MEMBER,
+        ),
+      ],
+      ...members.map((member) => [
+        Markup.button.callback(
+          `Quitar ${this.truncateTaskTitle(member.name, 20)}`,
+          `family:remove:${member.id}`,
+        ),
+      ]),
+    ];
 
-    if (rows.length === 0) {
-      rows.push([Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)]);
-    }
+    rows.push([Markup.button.callback('Cerrar', CALLBACK_FAMILY_CANCEL)]);
 
     return Markup.inlineKeyboard(rows);
   }
@@ -1735,7 +1836,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '- Comprar remedios mañana a las 18:00',
       '- Tarea familiar: pagar cuentas el viernes en la tarde',
       '',
-      '2. Crear tareas guiadas con el boton "➕ Nueva tarea".',
+      '2. Crear tareas guiadas con el boton "📝 Nueva tarea".',
       'El bot te pide titulo, tipo, fecha y prioridad paso a paso.',
       '',
       '3. Ver y ordenar pendientes.',

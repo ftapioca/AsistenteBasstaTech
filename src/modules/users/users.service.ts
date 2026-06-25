@@ -103,6 +103,12 @@ export class UsersService {
       );
     }
 
+    if (existing?.role === UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Ese telefono pertenece al administrador familiar y no puede agregarse como miembro.',
+      );
+    }
+
     if (existing) {
       return this.prisma.user.update({
         where: { id: existing.id },
