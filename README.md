@@ -12,6 +12,16 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - OpenAI API
 - Docker
 
+### Estado actual
+
+- La operacion productiva actual del bot vive en Telegram.
+- Existe una prueba tecnica previa para WhatsApp basada en OpenWA.
+- Esa prueba se considera pausada por ahora:
+  - sirvio para validar una base multicanal y aprendizajes de arquitectura
+  - no se considero estable para continuar desarrollo funcional
+- WhatsApp podria retomarse en el futuro con un gateway mas confiable, idealmente una integracion oficial.
+- El foco actual del proyecto vuelve a `main` sobre Telegram y sus mejoras de producto.
+
 ### Funcionalidades del MVP
 
 - Registro multi-familia por Telegram
