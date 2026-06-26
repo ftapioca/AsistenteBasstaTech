@@ -85,7 +85,7 @@ type BulkCallbackResult = {
 
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 const MENU_NEW_TASK = '📝 Nueva tarea';
-const MENU_PENDING = '📋 Pendientes';
+const MENU_PENDING = '📋 Ver tareas';
 const MENU_EDIT_FAMILY = '👨‍👩‍👧 Editar familia';
 const MENU_HELP = '❓ Ayuda';
 const MENU_CANCEL = 'Cancelar';
@@ -109,6 +109,7 @@ const CALLBACK_WIZARD_NOTE_YES = 'wizard:note:yes';
 const CALLBACK_WIZARD_NOTE_NO = 'wizard:note:no';
 const CALLBACK_WIZARD_CONFIRM = 'wizard:confirm';
 const CALLBACK_BULK_START_COMPLETE = 'bulk:start:complete';
+const CALLBACK_VIEW_START = 'view:start';
 const CALLBACK_EDIT_START = 'edit:start';
 const CALLBACK_EDIT_CANCEL = 'edit:cancel';
 const CALLBACK_EDIT_SECTION_CONTENT = 'edit:section:content';
@@ -307,6 +308,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         callbackQuery: { data?: string };
       };
       await this.safeHandleBulkCallback(typedCtx);
+    });
+
+    this.bot.action(/^view:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleViewCallback(typedCtx);
     });
 
     this.bot.action(/^edit:/, async (ctx) => {
@@ -840,6 +848,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const text = this.formatTaskList(listType, tasks);
     const buttons = [];
 
+    if (tasks.length > 0) {
+      buttons.push(Markup.button.callback('🔎 Ver tarea', CALLBACK_VIEW_START));
+    }
+
     if (tasks.length > 0 && allowBulkComplete) {
       buttons.push(
         Markup.button.callback(
@@ -847,10 +859,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           CALLBACK_BULK_START_COMPLETE,
         ),
       );
-    }
-
-    if (tasks.length > 0) {
-      buttons.push(Markup.button.callback('✏️ Editar', CALLBACK_EDIT_START));
     }
 
     if (tasks.length > 0 && allowBulkDelete) {
@@ -1105,6 +1113,44 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
 
       const result = await this.handleBulkCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
+      await ctx.answerCbQuery(result.answerText);
+
+      if (result.editText) {
+        await ctx.editMessageText(result.editText, result.editExtra);
+      } else if (result.clearMarkup) {
+        await ctx.editMessageReplyMarkup(undefined);
+      }
+
+      if (result.reply) {
+        const payload = this.normalizeBotResponse(result.reply);
+        const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
+  private async safeHandleViewCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const result = await this.handleViewCallback(
         ctx,
         String(ctx.from.id),
         data,
@@ -1491,6 +1537,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data.startsWith('edit:field:scope:')) {
+      const taskId = data.replace('edit:field:scope:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      return {
+        answerText: 'Editar tipo',
+        editText: this.formatTaskScopeMenu(task),
+        editExtra: this.withHtml(this.buildTaskScopeKeyboard(task.id)),
+      };
+    }
+
     if (data.startsWith('edit:field:due:')) {
       const taskId = data.replace('edit:field:due:', '');
       const task = await this.tasksService.getEditableTaskById(user.id, taskId);
@@ -1595,6 +1651,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data.startsWith('edit:scope:set:')) {
+      const [, , , taskId, value] = data.split(':');
+      const scope = value === 'family' ? TaskScope.FAMILY : TaskScope.PERSONAL;
+      const task = await this.tasksService.updateTaskScope(
+        user.id,
+        taskId,
+        scope,
+      );
+      return {
+        answerText: 'Tipo actualizado',
+        editText: this.formatEditSectionMenu(
+          task,
+          'content',
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(
+          this.buildEditSectionKeyboard(task, 'content'),
+        ),
+      };
+    }
+
     if (data.startsWith('edit:reminder:set:')) {
       const [, , , taskId, value] = data.split(':');
       const reminderMinutesBefore = value === 'default' ? null : Number(value);
@@ -1651,6 +1729,106 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.usersService.resolveReminderMinutesBefore(user),
         ),
         editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
+      };
+    }
+
+    return {
+      answerText: undefined,
+      clearMarkup: false,
+    };
+  }
+
+  private async handleViewCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BulkCallbackResult> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    if (data === CALLBACK_VIEW_START || data === 'view:back:list') {
+      return this.startViewTaskSelection(ctx, user.id);
+    }
+
+    if (data.startsWith('view:select:')) {
+      const index = Number(data.replace('view:select:', ''));
+      const task = await this.tasksService.getVisibleTaskByIndex(
+        user.id,
+        String(ctx.chat.id),
+        index,
+      );
+
+      return {
+        answerText: 'Tarea seleccionada',
+        editText: this.formatTaskDetail(
+          task,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+      };
+    }
+
+    if (data.startsWith('view:complete:ask:')) {
+      const taskId = data.replace('view:complete:ask:', '');
+      const task = await this.tasksService.getVisibleTaskById(user.id, taskId);
+      return {
+        answerText: 'Confirmar',
+        editText: this.formatTaskCompleteConfirmPrompt(task),
+        editExtra: this.withHtml(
+          this.buildTaskCompleteConfirmKeyboard(task.id),
+        ),
+      };
+    }
+
+    if (data.startsWith('view:complete:confirm:')) {
+      const taskId = data.replace('view:complete:confirm:', '');
+      await this.tasksService.completeTaskById(user.id, taskId);
+      return {
+        answerText: 'Completada',
+        clearMarkup: true,
+        reply: 'Listo, tarea completada.',
+      };
+    }
+
+    if (data.startsWith('view:complete:cancel:')) {
+      const taskId = data.replace('view:complete:cancel:', '');
+      const task = await this.tasksService.getVisibleTaskById(user.id, taskId);
+      return {
+        answerText: 'Cancelado',
+        editText: this.formatTaskDetail(
+          task,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+      };
+    }
+
+    if (data.startsWith('view:edit:')) {
+      const taskId = data.replace('view:edit:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Editar tarea',
+        editText: this.formatEditTaskMenu(
+          task,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
+      };
+    }
+
+    if (data.startsWith('view:close:')) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return {
+        answerText: 'Cerrar',
+        clearMarkup: true,
       };
     }
 
@@ -1952,6 +2130,36 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       editExtra: this.withHtml(
         this.buildBulkSelectionKeyboard(mode, tasks, []),
       ),
+    };
+  }
+
+  private async startViewTaskSelection(
+    ctx: BotReplyContext,
+    userId: string,
+  ): Promise<BulkCallbackResult> {
+    let tasks = await this.tasksService.getTasksFromContext(
+      String(ctx.chat.id),
+    );
+    if (tasks.length === 0) {
+      tasks = await this.tasksService.listPendingTasks(userId);
+      await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+    }
+
+    if (tasks.length === 0) {
+      throw new BadRequestException(
+        'No hay una lista reciente con tareas para revisar.',
+      );
+    }
+
+    return {
+      answerText: undefined,
+      editText: this.formatViewSelectionPrompt(
+        tasks,
+        this.usersService.resolveTimezone(
+          await this.usersService.requireActiveUser(userId),
+        ),
+      ),
+      editExtra: this.withHtml(this.buildViewSelectionKeyboard(tasks)),
     };
   }
 
@@ -3061,6 +3269,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ].join('\n');
   }
 
+  private formatViewSelectionPrompt(
+    tasks: (DisplayTask & { id: string })[],
+    timezone: string,
+  ) {
+    const lines = tasks.map(
+      (task, index) =>
+        `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`,
+    );
+
+    return [
+      this.bold('¿Que tarea quieres revisar?'),
+      '',
+      lines.join('\n'),
+      '',
+      this.bold('Toca una opcion para ver el detalle.'),
+    ].join('\n');
+  }
+
   private buildEditSelectionKeyboard(tasks: (DisplayTask & { id: string })[]) {
     const rows = tasks.map((task, index) => [
       Markup.button.callback(
@@ -3070,6 +3296,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_EDIT_CANCEL)]);
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private buildViewSelectionKeyboard(tasks: (DisplayTask & { id: string })[]) {
+    const rows = tasks.map((task, index) => [
+      Markup.button.callback(
+        `${index + 1}. ${this.truncateTaskTitle(task.title, 18)}`,
+        `view:select:${index + 1}`,
+      ),
+    ]);
+
+    rows.push([Markup.button.callback('Cerrar', 'view:close:list')]);
     return Markup.inlineKeyboard(rows);
   }
 
@@ -3143,6 +3381,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return [
         this.bold('Editar contenido'),
         `${this.bold('Titulo actual:')} ${this.escapeHtml(task.title)}`,
+        `${this.bold('Tipo:')} ${this.escapeHtml(this.formatScopeLabel(task.scope))}`,
         `${this.bold('Nota:')} ${task.description?.trim() ? 'Sí' : 'No'}`,
         '',
         this.bold('¿Que parte del contenido quieres cambiar?'),
@@ -3182,6 +3421,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             ],
             [
               Markup.button.callback(
+                '👤/👪 Tipo',
+                `edit:field:scope:${task.id}`,
+              ),
+            ],
+            [
+              Markup.button.callback(
                 task.description?.trim() ? '📝 Editar nota' : '📝 Agregar nota',
                 `edit:field:note:${task.id}`,
               ),
@@ -3208,6 +3453,77 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
 
     return Markup.inlineKeyboard(rows);
+  }
+
+  private formatTaskScopeMenu(task: DisplayTask & { id: string }) {
+    return [
+      this.bold(`Editar tipo de "${task.title}"`),
+      `${this.bold('Valor actual:')} ${this.escapeHtml(
+        this.formatScopeLabel(task.scope),
+      )}`,
+      '',
+      this.bold('Elige si la tarea debe ser personal o familiar.'),
+    ].join('\n');
+  }
+
+  private buildTaskScopeKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '👤 Personal',
+          `edit:scope:set:${taskId}:personal`,
+        ),
+        Markup.button.callback(
+          '👪 Familiar',
+          `edit:scope:set:${taskId}:family`,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '⬅️ Volver',
+          `${CALLBACK_EDIT_SECTION_CONTENT}:${taskId}`,
+        ),
+        Markup.button.callback('Cerrar', `edit:close:${taskId}`),
+      ],
+    ]);
+  }
+
+  private buildViewTaskDetailKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✅ Marcar como completada',
+          `view:complete:ask:${taskId}`,
+        ),
+      ],
+      [Markup.button.callback('✏️ Editar', `view:edit:${taskId}`)],
+      [
+        Markup.button.callback('⬅️ Volver', 'view:back:list'),
+        Markup.button.callback('Cerrar', `view:close:${taskId}`),
+      ],
+    ]);
+  }
+
+  private formatTaskCompleteConfirmPrompt(
+    task: DisplayTask & { id?: string; description?: string | null },
+  ) {
+    return [
+      this.bold('Confirmar completado'),
+      '',
+      `¿Quieres marcar como completada "${this.escapeHtml(task.title)}"?`,
+    ].join('\n');
+  }
+
+  private buildTaskCompleteConfirmKeyboard(taskId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✅ Confirmar',
+          `view:complete:confirm:${taskId}`,
+        ),
+      ],
+      [Markup.button.callback('Cancelar', `view:complete:cancel:${taskId}`)],
+    ]);
   }
 
   private buildEditInputKeyboard(taskId: string) {

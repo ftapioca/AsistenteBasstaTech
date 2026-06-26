@@ -313,6 +313,20 @@ export class TasksService {
     return task;
   }
 
+  async getVisibleTaskById(userId: string, taskId: string) {
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    const user = await this.usersService.requireActiveUser(userId);
+    this.assertCanViewTask(user, task);
+    return task;
+  }
+
   async getEditableTaskById(userId: string, taskId: string) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
@@ -397,6 +411,26 @@ export class TasksService {
     });
   }
 
+  async updateTaskScope(userId: string, taskId: string, scope: TaskScope) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        scope,
+      },
+    });
+  }
+
   async updateTaskDescription(
     userId: string,
     taskId: string,
@@ -457,6 +491,27 @@ export class TasksService {
     });
 
     return tasks;
+  }
+
+  async completeTaskById(userId: string, taskId: string) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanCompleteTask(user, task);
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        status: TaskStatus.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
   }
 
   async deleteTasksByIds(userId: string, taskIds: string[]) {
