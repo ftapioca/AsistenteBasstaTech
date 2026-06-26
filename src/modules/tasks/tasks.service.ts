@@ -40,6 +40,14 @@ type PendingAction =
       duplicateTaskTitle?: string;
     }
   | {
+      type: 'CREATE_FAMILY_CONFIRMATION';
+      phoneNumber: string;
+      telegramUserId: string;
+      telegramChatId: string;
+      telegramUsername?: string | null;
+      fallbackName: string;
+    }
+  | {
       type: 'CREATE_TASK_WIZARD';
       step:
         | 'TITLE'

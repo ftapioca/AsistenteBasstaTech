@@ -1,5 +1,15 @@
 import { z } from 'zod';
 
+const optionalUrl = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().url().optional(),
+);
+
+const optionalNonEmptyString = z.preprocess(
+  (value) => (value === '' ? undefined : value),
+  z.string().min(1).optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z
     .enum(['development', 'test', 'production'])
@@ -14,9 +24,9 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default('gpt-5.4-mini'),
   TELEGRAM_BOT_TOKEN: z.string().optional(),
-  TELEGRAM_WEBHOOK_URL: z.string().url().optional(),
-  TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),
-  RENDER_EXTERNAL_URL: z.string().url().optional(),
+  TELEGRAM_WEBHOOK_URL: optionalUrl,
+  TELEGRAM_WEBHOOK_SECRET: optionalNonEmptyString,
+  RENDER_EXTERNAL_URL: optionalUrl,
   DEFAULT_TIMEZONE: z.string().default('America/Santiago'),
   DEFAULT_DAILY_BRIEFING_TIME: z.string().default('08:30'),
   DAILY_BRIEFING_GRACE_MINUTES: z.coerce.number().int().positive().default(240),

@@ -436,13 +436,37 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    const user = await this.usersService.linkTelegramAccount({
+    const linkInput = {
       phoneNumber: contact.phone_number,
       telegramUserId: String(ctx.from.id),
       telegramChatId: String(ctx.chat.id),
       telegramUsername: ctx.from.username,
       fallbackName: ctx.from.first_name || contact.first_name || 'Usuario',
-    });
+    };
+    const existingUser = await this.usersService.findByPhoneNumberForLink(
+      contact.phone_number,
+    );
+
+    if (!existingUser) {
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'CREATE_FAMILY_CONFIRMATION',
+        ...linkInput,
+      });
+
+      return [
+        this.bold('No encontre una cuenta existente para ese numero.'),
+        '',
+        this.bold(
+          'Si continuas, creare una nueva familia y te dejare como administrador.',
+        ),
+        this.bold('Responde "si" para continuar o "no" para cancelar.'),
+      ].join('\n');
+    }
+
+    const user = await this.usersService.linkExistingTelegramAccount(
+      existingUser.id,
+      linkInput,
+    );
 
     await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
 
@@ -1026,7 +1050,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const pendingAction = await this.tasksService.getPendingAction(
       String(ctx.chat.id),
     );
-    if (!pendingAction || pendingAction.type !== 'CREATE_TASK_CONFIRMATION') {
+    if (!pendingAction) {
+      return null;
+    }
+
+    if (
+      pendingAction.type !== 'CREATE_FAMILY_CONFIRMATION' &&
+      pendingAction.type !== 'CREATE_TASK_CONFIRMATION'
+    ) {
       return null;
     }
 
@@ -1034,6 +1065,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (text === 'no' || text === 'cancelar') {
       return 'Listo, no hice ningun cambio.';
+    }
+
+    if (pendingAction.type === 'CREATE_FAMILY_CONFIRMATION') {
+      const user = await this.usersService.createFamilyAdmin({
+        familyName: `Familia de ${pendingAction.fallbackName}`,
+        name: pendingAction.fallbackName,
+        phoneNumber: pendingAction.phoneNumber,
+        telegramUserId: pendingAction.telegramUserId,
+        telegramChatId: pendingAction.telegramChatId,
+        telegramUsername: pendingAction.telegramUsername,
+      });
+
+      return `Bienvenido ${user.name}. Se creo ${user.family.name} y quedaste como administrador.\n\nUsa /crearusuario Nombre +56912345678 para agregar miembros.`;
     }
 
     const task = await this.tasksService.createTaskForUser(

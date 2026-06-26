@@ -200,10 +200,26 @@ export class UsersService {
     telegramUsername?: string | null;
     fallbackName: string;
   }) {
-    const phoneNumber = normalizePhoneNumber(input.phoneNumber);
-    const existing = await this.prisma.user.findFirst({
+    const existing = await this.findByPhoneNumberForLink(input.phoneNumber);
+
+    if (!existing) {
+      return this.createFamilyAdmin({
+        familyName: `Familia de ${input.fallbackName}`,
+        name: input.fallbackName,
+        phoneNumber: input.phoneNumber,
+        telegramUserId: input.telegramUserId,
+        telegramChatId: input.telegramChatId,
+        telegramUsername: input.telegramUsername,
+      });
+    }
+
+    return this.linkExistingTelegramAccount(existing.id, input);
+  }
+
+  async findByPhoneNumberForLink(phoneNumber: string) {
+    return this.prisma.user.findFirst({
       where: {
-        phoneNumber: { in: buildPhoneLookupVariants(input.phoneNumber) },
+        phoneNumber: { in: buildPhoneLookupVariants(phoneNumber) },
       },
       include: {
         family: {
@@ -213,16 +229,22 @@ export class UsersService {
         },
       },
     });
+  }
+
+  async linkExistingTelegramAccount(
+    userId: string,
+    input: {
+      phoneNumber: string;
+      telegramUserId: string;
+      telegramChatId: string;
+      telegramUsername?: string | null;
+    },
+  ) {
+    const phoneNumber = normalizePhoneNumber(input.phoneNumber);
+    const existing = await this.findById(userId);
 
     if (!existing) {
-      return this.createFamilyAdmin({
-        familyName: `Familia de ${input.fallbackName}`,
-        name: input.fallbackName,
-        phoneNumber,
-        telegramUserId: input.telegramUserId,
-        telegramChatId: input.telegramChatId,
-        telegramUsername: input.telegramUsername,
-      });
+      throw new NotFoundException('Usuario no encontrado.');
     }
 
     if (
