@@ -106,8 +106,10 @@ La API HTTP queda en `http://localhost:3000`:
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
 - La lista de pendientes muestra acciones contextuales para `Completar varias`, `Editar` y `Eliminar varias`
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
+- La edicion de tareas ahora usa una navegacion inline de `2 niveles`: primero eliges area (`Contenido` o `Programacion`) y luego la accion concreta
 - La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora`, `Nota` y `Alerta` desde menus contextuales
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
+- El wizard de `/nueva` ahora pregunta si quieres agregar una nota despues de definir `Fecha/Hora`; si respondes que si, permite escribirla antes de pedir la prioridad
 - `/alertas` permite definir por separado la anticipacion predeterminada de recordatorios y la hora del briefing diario por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
 - El briefing diario ahora separa `Vencidas`, `Hoy`, `Proximas` y `Sin fecha` para evitar perder visibilidad de otras tareas abiertas
@@ -142,24 +144,20 @@ Comportamiento actual:
 
 Prioridad actual de trabajo:
 
-1. mejorar el flujo de edicion de tareas con botones inline de 2 niveles
-2. agregar nota opcional al wizard de `Nueva tarea`
-3. subtareas como entidad independiente, no embebida en `description`
-4. tareas repetitivas con recurrencia quincenal, semanal o mensual
-5. configuracion familiar avanzada para horarios y politicas de briefing/recordatorios
-6. exponer mas configuracion familiar en la UX/comandos
-7. agregar tests funcionales para Telegram, recordatorios y briefing
+1. subtareas como entidad independiente, no embebida en `description`
+2. tareas repetitivas con recurrencia quincenal, semanal o mensual
+3. configuracion familiar avanzada para horarios y politicas de briefing/recordatorios
+4. exponer mas configuracion familiar en la UX/comandos
+5. agregar tests funcionales para Telegram, recordatorios y briefing
 
 Orden de implementacion recomendado:
 
-1. edicion de tareas
-2. wizard de `Nueva tarea` con nota
-3. tests funcionales de esos dos flujos
-4. subtareas
-5. recurrencia
-6. configuracion familiar avanzada
-7. UX/comandos de configuracion familiar
-8. tests de automatizaciones y configuracion
+1. tests funcionales de `edicion` y `wizard`
+2. subtareas
+3. recurrencia
+4. configuracion familiar avanzada
+5. UX/comandos de configuracion familiar
+6. tests de automatizaciones y configuracion
 
 ### Ejemplos de lenguaje natural
 

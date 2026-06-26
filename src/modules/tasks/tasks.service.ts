@@ -41,12 +41,20 @@ type PendingAction =
     }
   | {
       type: 'CREATE_TASK_WIZARD';
-      step: 'TITLE' | 'SCOPE' | 'DUE_DATE' | 'PRIORITY' | 'CONFIRM';
+      step:
+        | 'TITLE'
+        | 'SCOPE'
+        | 'DUE_DATE'
+        | 'NOTE_DECISION'
+        | 'NOTE_INPUT'
+        | 'PRIORITY'
+        | 'CONFIRM';
       draft: {
         title?: string;
         scope?: TaskScope;
         dueDate?: string | null;
         dueDateInput?: string | null;
+        description?: string | null;
         priority?: Priority;
       };
     }

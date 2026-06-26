@@ -95,6 +95,8 @@ const WIZARD_DUE_NONE = 'Sin fecha';
 const WIZARD_PRIORITY_HIGH = 'Alta';
 const WIZARD_PRIORITY_MEDIUM = 'Media';
 const WIZARD_PRIORITY_LOW = 'Baja';
+const WIZARD_NOTE_YES = 'Si, agregar nota';
+const WIZARD_NOTE_NO = 'No, continuar';
 const WIZARD_CONFIRM_CREATE = 'Crear tarea';
 const CALLBACK_WIZARD_SCOPE_PERSONAL = 'wizard:scope:personal';
 const CALLBACK_WIZARD_SCOPE_FAMILY = 'wizard:scope:family';
@@ -103,10 +105,14 @@ const CALLBACK_WIZARD_CANCEL = 'wizard:cancel';
 const CALLBACK_WIZARD_PRIORITY_HIGH = 'wizard:priority:high';
 const CALLBACK_WIZARD_PRIORITY_MEDIUM = 'wizard:priority:medium';
 const CALLBACK_WIZARD_PRIORITY_LOW = 'wizard:priority:low';
+const CALLBACK_WIZARD_NOTE_YES = 'wizard:note:yes';
+const CALLBACK_WIZARD_NOTE_NO = 'wizard:note:no';
 const CALLBACK_WIZARD_CONFIRM = 'wizard:confirm';
 const CALLBACK_BULK_START_COMPLETE = 'bulk:start:complete';
 const CALLBACK_EDIT_START = 'edit:start';
 const CALLBACK_EDIT_CANCEL = 'edit:cancel';
+const CALLBACK_EDIT_SECTION_CONTENT = 'edit:section:content';
+const CALLBACK_EDIT_SECTION_SCHEDULE = 'edit:section:schedule';
 const CALLBACK_ALERTS_CANCEL = 'alerts:cancel';
 const CALLBACK_ALERTS_HOME = 'alerts:home';
 const CALLBACK_ALERTS_SECTION_REMINDERS = 'alerts:section:reminders';
@@ -1300,6 +1306,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return this.handleWizardInput(ctx, user.id, WIZARD_PRIORITY_MEDIUM);
       case CALLBACK_WIZARD_PRIORITY_LOW:
         return this.handleWizardInput(ctx, user.id, WIZARD_PRIORITY_LOW);
+      case CALLBACK_WIZARD_NOTE_YES:
+        return this.handleWizardInput(ctx, user.id, WIZARD_NOTE_YES);
+      case CALLBACK_WIZARD_NOTE_NO:
+        return this.handleWizardInput(ctx, user.id, WIZARD_NOTE_NO);
       case CALLBACK_WIZARD_CONFIRM:
         return this.handleWizardInput(ctx, user.id, WIZARD_CONFIRM_CREATE);
       default:
@@ -1442,6 +1452,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.usersService.resolveReminderMinutesBefore(user),
         ),
         editExtra: this.withHtml(this.buildEditTaskKeyboard(task)),
+      };
+    }
+
+    if (data.startsWith('edit:section:')) {
+      const [, , section, taskId] = data.split(':');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      return {
+        answerText: 'Opciones de edicion',
+        editText: this.formatEditSectionMenu(
+          task,
+          section,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(this.buildEditSectionKeyboard(task, section)),
       };
     }
 
@@ -2374,7 +2399,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         const dueDate = await this.resolveWizardDueDate(text, userId);
         await this.tasksService.setPendingAction(String(ctx.chat.id), {
           type: 'CREATE_TASK_WIZARD',
-          step: 'PRIORITY',
+          step: 'NOTE_DECISION',
           draft: {
             ...pendingAction.draft,
             dueDate,
@@ -2382,10 +2407,58 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           },
         });
         return {
+          text: '¿Quieres agregar una nota a la tarea?',
+          extra: this.wizardNoteInlineKeyboard,
+        };
+      }
+      case 'NOTE_DECISION': {
+        const wantsNote = this.parseWizardNoteDecision(text);
+        if (wantsNote == null) {
+          throw new BadRequestException(
+            'Responde "Si, agregar nota" o "No, continuar".',
+          );
+        }
+
+        if (wantsNote) {
+          await this.tasksService.setPendingAction(String(ctx.chat.id), {
+            type: 'CREATE_TASK_WIZARD',
+            step: 'NOTE_INPUT',
+            draft: {
+              ...pendingAction.draft,
+            },
+          });
+          return {
+            text: 'Escribe la nota que quieres guardar en la tarea.',
+            extra: this.withHtml(),
+          };
+        }
+
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'PRIORITY',
+          draft: {
+            ...pendingAction.draft,
+            description: null,
+          },
+        });
+        return {
           text: '¿Que prioridad tiene?',
           extra: this.wizardPriorityInlineKeyboard,
         };
       }
+      case 'NOTE_INPUT':
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'PRIORITY',
+          draft: {
+            ...pendingAction.draft,
+            description: text,
+          },
+        });
+        return {
+          text: '¿Que prioridad tiene?',
+          extra: this.wizardPriorityInlineKeyboard,
+        };
       case 'PRIORITY': {
         const priority = this.parseWizardPriority(text);
         if (!priority) {
@@ -2423,7 +2496,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           userId,
           validateDto(CreateTaskDto, {
             title: pendingAction.draft.title,
-            description: null,
+            description: pendingAction.draft.description ?? null,
             scope: pendingAction.draft.scope ?? TaskScope.PERSONAL,
             priority: pendingAction.draft.priority ?? Priority.MEDIUM,
             dueDate: pendingAction.draft.dueDate ?? null,
@@ -2524,11 +2597,31 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return null;
   }
 
+  private parseWizardNoteDecision(text: string) {
+    const lowered = text.trim().toLowerCase();
+
+    if (
+      lowered === 'si' ||
+      lowered === 'sí' ||
+      lowered === 'si, agregar nota' ||
+      lowered === 'sí, agregar nota'
+    ) {
+      return true;
+    }
+
+    if (lowered === 'no' || lowered === 'no, continuar') {
+      return false;
+    }
+
+    return null;
+  }
+
   private formatTaskDraftSummary(draft: {
     title?: string;
     scope?: TaskScope;
     dueDate?: string | null;
     dueDateInput?: string | null;
+    description?: string | null;
     priority?: Priority;
   }) {
     const timezone = this.configService.get<string>(
@@ -2546,6 +2639,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       `Titulo: ${draft.title ?? '-'}`,
       `Tipo: ${this.formatScopeLabel(draft.scope ?? TaskScope.PERSONAL)}`,
       `Vence: ${dueDate}`,
+      `Nota: ${draft.description?.trim() ?? 'Sin nota'}`,
       `Prioridad: ${this.formatPriorityLabel(draft.priority ?? Priority.MEDIUM)}`,
       '',
       'Responde "Crear tarea" o "si" para confirmarla.',
@@ -3003,7 +3097,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ),
       )}`,
       '',
-      this.bold('¿Que quieres cambiar?'),
+      this.bold('Elige un area para continuar.'),
     ].join('\n');
   }
 
@@ -3012,21 +3106,108 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback('✏️ Titulo', `edit:field:title:${task.id}`),
-        Markup.button.callback('🕒 Fecha/Hora', `edit:field:due:${task.id}`),
-      ],
-      [
         Markup.button.callback(
-          task.description?.trim() ? '📝 Editar nota' : '📝 Agregar nota',
-          `edit:field:note:${task.id}`,
+          '📝 Contenido',
+          `${CALLBACK_EDIT_SECTION_CONTENT}:${task.id}`,
+        ),
+        Markup.button.callback(
+          '🗓️ Programacion',
+          `${CALLBACK_EDIT_SECTION_SCHEDULE}:${task.id}`,
         ),
       ],
-      [Markup.button.callback('🔔 Alerta', `edit:field:reminder:${task.id}`)],
       [
         Markup.button.callback('⬅️ Cambiar tarea', 'edit:back:list'),
         Markup.button.callback('Cerrar', `edit:close:${task.id}`),
       ],
     ]);
+  }
+
+  private formatEditSectionMenu(
+    task: DisplayTask & {
+      id?: string;
+      description?: string | null;
+      reminderMinutesBefore?: number | null;
+    },
+    section: string,
+    timezone: string,
+    defaultReminderMinutesBefore = this.configService.get<number>(
+      'REMINDER_MINUTES_BEFORE',
+      30,
+    ),
+  ) {
+    const due = task.dueDate
+      ? this.formatDueLabel(task.dueDate, timezone)
+      : 'sin fecha';
+
+    if (section === 'content') {
+      return [
+        this.bold('Editar contenido'),
+        `${this.bold('Titulo actual:')} ${this.escapeHtml(task.title)}`,
+        `${this.bold('Nota:')} ${task.description?.trim() ? 'Sí' : 'No'}`,
+        '',
+        this.bold('¿Que parte del contenido quieres cambiar?'),
+      ].join('\n');
+    }
+
+    return [
+      this.bold('Editar programacion'),
+      `${this.bold('Vence:')} ${this.escapeHtml(due)}`,
+      `${this.bold('Alerta:')} ${this.escapeHtml(
+        this.formatReminderLabel(
+          task.reminderMinutesBefore,
+          defaultReminderMinutesBefore,
+        ),
+      )}`,
+      '',
+      this.bold('¿Que parte de la programacion quieres cambiar?'),
+    ].join('\n');
+  }
+
+  private buildEditSectionKeyboard(
+    task: DisplayTask & {
+      id: string;
+      description?: string | null;
+      reminderMinutesBefore?: number | null;
+    },
+    section: string,
+  ) {
+    const rows =
+      section === 'content'
+        ? [
+            [
+              Markup.button.callback(
+                '✏️ Titulo',
+                `edit:field:title:${task.id}`,
+              ),
+            ],
+            [
+              Markup.button.callback(
+                task.description?.trim() ? '📝 Editar nota' : '📝 Agregar nota',
+                `edit:field:note:${task.id}`,
+              ),
+            ],
+          ]
+        : [
+            [
+              Markup.button.callback(
+                '🕒 Fecha/Hora',
+                `edit:field:due:${task.id}`,
+              ),
+            ],
+            [
+              Markup.button.callback(
+                '🔔 Alerta',
+                `edit:field:reminder:${task.id}`,
+              ),
+            ],
+          ];
+
+    rows.push([
+      Markup.button.callback('⬅️ Volver', `edit:menu:${task.id}`),
+      Markup.button.callback('Cerrar', `edit:close:${task.id}`),
+    ]);
+
+    return Markup.inlineKeyboard(rows);
   }
 
   private buildEditInputKeyboard(taskId: string) {
@@ -3491,6 +3672,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           CALLBACK_WIZARD_PRIORITY_LOW,
         ),
       ],
+      [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
+    ]);
+  }
+
+  private get wizardNoteInlineKeyboard() {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(WIZARD_NOTE_YES, CALLBACK_WIZARD_NOTE_YES)],
+      [Markup.button.callback(WIZARD_NOTE_NO, CALLBACK_WIZARD_NOTE_NO)],
       [Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)],
     ]);
   }
