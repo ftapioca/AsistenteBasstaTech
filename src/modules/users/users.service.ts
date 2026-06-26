@@ -72,8 +72,6 @@ export class UsersService {
         telegramUsername: input.telegramUsername ?? null,
         role: UserRole.FAMILY_ADMIN,
         timezone: family.settings?.timezone ?? this.defaultTimezone,
-        dailyBriefingTime:
-          family.settings?.dailyBriefingTime ?? this.defaultBriefingTime,
       },
       include: {
         family: {
@@ -121,17 +119,13 @@ export class UsersService {
       });
     }
 
-    const resolvedTimezone = this.resolveTimezone(admin);
-    const resolvedBriefingTime = this.resolveDailyBriefingTime(admin);
-
     return this.prisma.user.create({
       data: {
         familyId: admin.familyId,
         name: dto.name,
         phoneNumber,
         role: UserRole.USER,
-        timezone: resolvedTimezone,
-        dailyBriefingTime: resolvedBriefingTime,
+        timezone: this.resolveTimezone(admin),
       },
     });
   }
@@ -267,13 +261,37 @@ export class UsersService {
     return user;
   }
 
-  async updateReminderMinutesBefore(userId: string, reminderMinutesBefore: number | null) {
+  async updateReminderMinutesBefore(
+    userId: string,
+    reminderMinutesBefore: number | null,
+  ) {
     const user = await this.requireActiveUser(userId);
 
     return this.prisma.user.update({
       where: { id: user.id },
       data: {
         reminderMinutesBefore,
+      },
+      include: {
+        family: {
+          include: {
+            settings: true,
+          },
+        },
+      },
+    });
+  }
+
+  async updateDailyBriefingTime(
+    userId: string,
+    dailyBriefingTime: string | null,
+  ) {
+    const user = await this.requireActiveUser(userId);
+
+    return this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        dailyBriefingTime,
       },
       include: {
         family: {

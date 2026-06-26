@@ -21,7 +21,11 @@ const envSchema = z.object({
   DEFAULT_DAILY_BRIEFING_TIME: z.string().default('08:30'),
   DAILY_BRIEFING_GRACE_MINUTES: z.coerce.number().int().positive().default(240),
   REMINDER_MINUTES_BEFORE: z.coerce.number().int().positive().default(30),
-  REMINDER_OVERDUE_GRACE_MINUTES: z.coerce.number().int().nonnegative().default(30),
+  REMINDER_OVERDUE_GRACE_MINUTES: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(30),
 });
 
 export function validateEnvironment(config: Record<string, unknown>) {

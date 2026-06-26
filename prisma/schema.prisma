@@ -28,7 +28,7 @@ model User {
   role              UserRole           @default(USER)
   reminderMinutesBefore Int?
   timezone          String
-  dailyBriefingTime String
+  dailyBriefingTime String?
   isActive          Boolean            @default(true)
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt

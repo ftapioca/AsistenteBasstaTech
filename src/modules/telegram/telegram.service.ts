@@ -108,6 +108,9 @@ const CALLBACK_BULK_START_COMPLETE = 'bulk:start:complete';
 const CALLBACK_EDIT_START = 'edit:start';
 const CALLBACK_EDIT_CANCEL = 'edit:cancel';
 const CALLBACK_ALERTS_CANCEL = 'alerts:cancel';
+const CALLBACK_ALERTS_HOME = 'alerts:home';
+const CALLBACK_ALERTS_SECTION_REMINDERS = 'alerts:section:reminders';
+const CALLBACK_ALERTS_SECTION_BRIEFING = 'alerts:section:briefing';
 const CALLBACK_HELP_CANCEL = 'help:cancel';
 const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
 const CALLBACK_BULK_CANCEL = 'bulk:cancel';
@@ -215,7 +218,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     this.bot.command('ayuda', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
-      await this.safeReply(typedCtx, Promise.resolve(this.buildHelpHomeResponse()));
+      await this.safeReply(
+        typedCtx,
+        Promise.resolve(this.buildHelpHomeResponse()),
+      );
     });
 
     this.bot.command('alertas', async (ctx) => {
@@ -654,11 +660,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async handleAlertsSettings(ctx: BotTextContext): Promise<BotResponse> {
+  private async handleAlertsSettings(
+    ctx: BotTextContext,
+  ): Promise<BotResponse> {
     const user = await this.requireRegisteredUser(ctx);
     return {
-      text: this.formatUserAlertsMenu(user),
-      extra: this.withHtml(this.buildUserAlertsKeyboard()),
+      text: this.formatAlertsHomeMenu(user),
+      extra: this.withHtml(this.buildAlertsHomeKeyboard()),
     };
   }
 
@@ -708,7 +716,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return wizardReply;
     }
 
-    const editSelectionReply = await this.tryHandleEditTaskSelection(ctx, user.id);
+    const editSelectionReply = await this.tryHandleEditTaskSelection(
+      ctx,
+      user.id,
+    );
     if (editSelectionReply) {
       return editSelectionReply;
     }
@@ -833,9 +844,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (tasks.length > 0) {
-      buttons.push(
-        Markup.button.callback('✏️ Editar', CALLBACK_EDIT_START),
-      );
+      buttons.push(Markup.button.callback('✏️ Editar', CALLBACK_EDIT_START));
     }
 
     if (tasks.length > 0 && allowBulkDelete) {
@@ -912,7 +921,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     const sections = [this.bold(headings[listType])];
     if (overdue.length > 0) {
-      sections.push(`${this.bold('🚨 Tareas vencidas')}\n${overdue.join('\n')}`);
+      sections.push(
+        `${this.bold('🚨 Tareas vencidas')}\n${overdue.join('\n')}`,
+      );
     }
     if (today.length > 0) {
       sections.push(`${this.bold('🗓️ Hoy')}\n${today.join('\n')}`);
@@ -1201,7 +1212,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const result = await this.handleHelpCallback(data);
+      const result = this.handleHelpCallback(data);
       await ctx.answerCbQuery(result.answerText);
 
       if (result.editText) {
@@ -1511,7 +1522,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         editText: [
           this.bold(`Editar fecha/hora de "${task.title}"`),
           '',
-          this.bold('Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".'),
+          this.bold(
+            'Escribe la nueva fecha y hora, por ejemplo "mañana 18:00".',
+          ),
           'Si prefieres salir, responde "Cancelar".',
         ].join('\n'),
         editExtra: this.withHtml(this.buildEditDueDateKeyboard(task.id)),
@@ -1559,8 +1572,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data.startsWith('edit:reminder:set:')) {
       const [, , , taskId, value] = data.split(':');
-      const reminderMinutesBefore =
-        value === 'default' ? null : Number(value);
+      const reminderMinutesBefore = value === 'default' ? null : Number(value);
       const task = await this.tasksService.updateTaskReminderMinutesBefore(
         user.id,
         taskId,
@@ -1714,7 +1726,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
       const members = await this.usersService.listManagedUsers(user.id);
       if (!pendingAction || pendingAction.type !== 'FAMILY_REMOVE_WIZARD') {
-        throw new BadRequestException('No hay una seleccion de integrantes activa.');
+        throw new BadRequestException(
+          'No hay una seleccion de integrantes activa.',
+        );
       }
 
       const target = members.find((member) => member.id === targetUserId);
@@ -1752,7 +1766,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         String(ctx.chat.id),
       );
       if (!pendingAction || pendingAction.type !== 'FAMILY_REMOVE_WIZARD') {
-        throw new BadRequestException('No hay una seleccion de integrantes activa.');
+        throw new BadRequestException(
+          'No hay una seleccion de integrantes activa.',
+        );
       }
 
       if (pendingAction.selectedMemberIds.length === 0) {
@@ -1809,13 +1825,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return [
         this.bold(`Perfecto. Guardare a la persona como "${text}".`),
         '',
-        this.bold('Ahora comparte su contacto desde Telegram para tomar el numero.'),
+        this.bold(
+          'Ahora comparte su contacto desde Telegram para tomar el numero.',
+        ),
         this.bold('Si prefieres salir, responde "Cancelar".'),
       ].join('\n');
     }
 
     return {
-      text: this.bold('Estoy esperando que compartas el contacto de esa persona.'),
+      text: this.bold(
+        'Estoy esperando que compartas el contacto de esa persona.',
+      ),
       extra: this.withHtml(),
     };
   }
@@ -1904,7 +1924,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return {
       answerText: undefined,
       editText: this.formatBulkSelectionPrompt(mode, tasks, []),
-      editExtra: this.withHtml(this.buildBulkSelectionKeyboard(mode, tasks, [])),
+      editExtra: this.withHtml(
+        this.buildBulkSelectionKeyboard(mode, tasks, []),
+      ),
     };
   }
 
@@ -1912,7 +1934,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ctx: BotReplyContext,
     userId: string,
   ): Promise<BulkCallbackResult> {
-    let tasks = await this.tasksService.getTasksFromContext(String(ctx.chat.id));
+    let tasks = await this.tasksService.getTasksFromContext(
+      String(ctx.chat.id),
+    );
     if (tasks.length === 0) {
       tasks = await this.tasksService.listPendingTasks(userId);
       await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
@@ -1959,10 +1983,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data === CALLBACK_ALERTS_HOME) {
+      return {
+        answerText: 'Alertas',
+        editText: this.formatAlertsHomeMenu(user),
+        editExtra: this.withHtml(this.buildAlertsHomeKeyboard()),
+      };
+    }
+
+    if (data === CALLBACK_ALERTS_SECTION_REMINDERS) {
+      return {
+        answerText: 'Recordatorios',
+        editText: this.formatReminderSettingsMenu(user),
+        editExtra: this.withHtml(this.buildUserReminderKeyboard()),
+      };
+    }
+
+    if (data === CALLBACK_ALERTS_SECTION_BRIEFING) {
+      return {
+        answerText: 'Briefing diario',
+        editText: this.formatBriefingSettingsMenu(user),
+        editExtra: this.withHtml(this.buildUserBriefingKeyboard()),
+      };
+    }
+
     if (data.startsWith('alerts:user:set:')) {
       const value = data.replace('alerts:user:set:', '');
-      const reminderMinutesBefore =
-        value === 'default' ? null : Number(value);
+      const reminderMinutesBefore = value === 'default' ? null : Number(value);
       const updatedUser = await this.usersService.updateReminderMinutesBefore(
         user.id,
         reminderMinutesBefore,
@@ -1970,8 +2017,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       return {
         answerText: 'Alerta actualizada',
-        editText: this.formatUserAlertsMenu(updatedUser),
-        editExtra: this.withHtml(this.buildUserAlertsKeyboard()),
+        editText: this.formatReminderSettingsMenu(updatedUser),
+        editExtra: this.withHtml(this.buildUserReminderKeyboard()),
+      };
+    }
+
+    if (data.startsWith('alerts:briefing:set:')) {
+      const value = data.replace('alerts:briefing:set:', '');
+      const dailyBriefingTime =
+        value === 'default' ? null : value.replace('-', ':');
+      const updatedUser = await this.usersService.updateDailyBriefingTime(
+        user.id,
+        dailyBriefingTime,
+      );
+
+      return {
+        answerText: 'Briefing actualizado',
+        editText: this.formatBriefingSettingsMenu(updatedUser),
+        editExtra: this.withHtml(this.buildUserBriefingKeyboard()),
       };
     }
 
@@ -1981,7 +2044,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async handleHelpCallback(data: string): Promise<BulkCallbackResult> {
+  private handleHelpCallback(data: string): BulkCallbackResult {
     if (data === CALLBACK_HELP_CANCEL) {
       return {
         answerText: 'Cerrar',
@@ -2522,7 +2585,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (isOverdue) {
         const minutesOverdue = Math.max(
           1,
-          Math.round(DateTime.now().setZone(timezone).diff(due, 'minutes').minutes),
+          Math.round(
+            DateTime.now().setZone(timezone).diff(due, 'minutes').minutes,
+          ),
         );
         if (minutesOverdue < 60) {
           return `vencido hace ${minutesOverdue} min`;
@@ -2601,12 +2666,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const hasSpecificTime = taskDue
         ? !(taskDue.hour === 0 && taskDue.minute === 0)
         : false;
-      const tomorrow = now.plus({ days: 1 }).startOf('day').set({
-        hour: hasSpecificTime ? taskDue!.hour : 9,
-        minute: hasSpecificTime ? taskDue!.minute : 0,
-        second: 0,
-        millisecond: 0,
-      });
+      const tomorrow = now
+        .plus({ days: 1 })
+        .startOf('day')
+        .set({
+          hour: hasSpecificTime ? taskDue!.hour : 9,
+          minute: hasSpecificTime ? taskDue!.minute : 0,
+          second: 0,
+          millisecond: 0,
+        });
       return tomorrow.toUTC().toISO();
     }
 
@@ -2618,8 +2686,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
-    return DateTime.fromJSDate(task.dueDate).setZone(timezone) <
-      DateTime.now().setZone(timezone);
+    return (
+      DateTime.fromJSDate(task.dueDate).setZone(timezone) <
+      DateTime.now().setZone(timezone)
+    );
   }
 
   private parseCommandIndex(
@@ -2685,9 +2755,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const label = this.formatMinutesLabel(effectiveValue);
-    return reminderMinutesBefore == null
-      ? `${label} (predeterminada)`
-      : label;
+    return reminderMinutesBefore == null ? `${label} (predeterminada)` : label;
   }
 
   private formatMinutesLabel(minutes: number) {
@@ -2737,8 +2805,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private buildFamilyManagementKeyboard() {
     return Markup.inlineKeyboard([
       [Markup.button.callback('✏️ Renombrar familia', CALLBACK_FAMILY_RENAME)],
-      [Markup.button.callback('🆕 Agregar miembro', CALLBACK_FAMILY_ADD_MEMBER)],
-      [Markup.button.callback('🗑️ Quitar miembro', CALLBACK_FAMILY_START_REMOVE)],
+      [
+        Markup.button.callback(
+          '🆕 Agregar miembro',
+          CALLBACK_FAMILY_ADD_MEMBER,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '🗑️ Quitar miembro',
+          CALLBACK_FAMILY_START_REMOVE,
+        ),
+      ],
       [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
     ]);
   }
@@ -2934,14 +3012,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   ) {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(
-          '✏️ Titulo',
-          `edit:field:title:${task.id}`,
-        ),
-        Markup.button.callback(
-          '🕒 Fecha/Hora',
-          `edit:field:due:${task.id}`,
-        ),
+        Markup.button.callback('✏️ Titulo', `edit:field:title:${task.id}`),
+        Markup.button.callback('🕒 Fecha/Hora', `edit:field:due:${task.id}`),
       ],
       [
         Markup.button.callback(
@@ -2949,9 +3021,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           `edit:field:note:${task.id}`,
         ),
       ],
-      [
-        Markup.button.callback('🔔 Alerta', `edit:field:reminder:${task.id}`),
-      ],
+      [Markup.button.callback('🔔 Alerta', `edit:field:reminder:${task.id}`)],
       [
         Markup.button.callback('⬅️ Cambiar tarea', 'edit:back:list'),
         Markup.button.callback('Cerrar', `edit:close:${task.id}`),
@@ -2962,10 +3032,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private buildEditInputKeyboard(taskId: string) {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(
-          '⬅️ Volver',
-          `edit:menu:${taskId}`,
-        ),
+        Markup.button.callback('⬅️ Volver', `edit:menu:${taskId}`),
         Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
       ],
     ]);
@@ -2983,10 +3050,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       ],
       [Markup.button.callback('Sin fecha', `edit:due:clear:${taskId}`)],
       [
-        Markup.button.callback(
-          '⬅️ Volver',
-          `edit:menu:${taskId}`,
-        ),
+        Markup.button.callback('⬅️ Volver', `edit:menu:${taskId}`),
         Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
       ],
     ]);
@@ -3003,10 +3067,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     rows.push([
-      Markup.button.callback(
-        '⬅️ Volver',
-        `edit:menu:${task.id}`,
-      ),
+      Markup.button.callback('⬅️ Volver', `edit:menu:${task.id}`),
       Markup.button.callback('Cancelar', CALLBACK_EDIT_CANCEL),
     ]);
 
@@ -3040,7 +3101,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  private buildUserAlertsKeyboard() {
+  private buildAlertsHomeKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '🔔 Recordatorios',
+          CALLBACK_ALERTS_SECTION_REMINDERS,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '☀️ Briefing diario',
+          CALLBACK_ALERTS_SECTION_BRIEFING,
+        ),
+      ],
+      [Markup.button.callback('Cerrar', CALLBACK_ALERTS_CANCEL)],
+    ]);
+  }
+
+  private buildUserReminderKeyboard() {
     return Markup.inlineKeyboard([
       [
         Markup.button.callback('10 min', 'alerts:user:set:10'),
@@ -3057,11 +3136,61 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           'alerts:user:set:default',
         ),
       ],
-      [Markup.button.callback('Cerrar', CALLBACK_ALERTS_CANCEL)],
+      [
+        Markup.button.callback('⬅️ Volver', CALLBACK_ALERTS_HOME),
+        Markup.button.callback('Cerrar', CALLBACK_ALERTS_CANCEL),
+      ],
     ]);
   }
 
-  private formatUserAlertsMenu(
+  private buildUserBriefingKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('07:00', 'alerts:briefing:set:07-00'),
+        Markup.button.callback('08:30', 'alerts:briefing:set:08-30'),
+      ],
+      [
+        Markup.button.callback('09:00', 'alerts:briefing:set:09-00'),
+        Markup.button.callback('10:00', 'alerts:briefing:set:10-00'),
+      ],
+      [
+        Markup.button.callback(
+          'Usar valor familiar',
+          'alerts:briefing:set:default',
+        ),
+      ],
+      [
+        Markup.button.callback('⬅️ Volver', CALLBACK_ALERTS_HOME),
+        Markup.button.callback('Cerrar', CALLBACK_ALERTS_CANCEL),
+      ],
+    ]);
+  }
+
+  private formatAlertsHomeMenu(
+    user: NonNullable<Awaited<ReturnType<UsersService['findById']>>>,
+  ) {
+    return [
+      this.bold('Alertas y briefing'),
+      '',
+      `${this.bold('Recordatorios por defecto:')} ${this.escapeHtml(
+        this.formatReminderLabel(
+          user.reminderMinutesBefore,
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+      )}`,
+      '',
+      `${this.bold('Briefing diario:')} ${this.escapeHtml(
+        this.formatBriefingTimeLabel(
+          user.dailyBriefingTime,
+          this.usersService.resolveDailyBriefingTime(user),
+        ),
+      )}`,
+      '',
+      this.bold('Elige que quieres configurar.'),
+    ].join('\n');
+  }
+
+  private formatReminderSettingsMenu(
     user: NonNullable<Awaited<ReturnType<UsersService['findById']>>>,
   ) {
     return [
@@ -3076,6 +3205,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.bold(
         '¿Con cuanta anticipacion quieres recibir tus recordatorios por defecto?',
       ),
+    ].join('\n');
+  }
+
+  private formatBriefingSettingsMenu(
+    user: NonNullable<Awaited<ReturnType<UsersService['findById']>>>,
+  ) {
+    return [
+      this.bold('Briefing diario'),
+      `${this.bold('Hora actual:')} ${this.escapeHtml(
+        this.formatBriefingTimeLabel(
+          user.dailyBriefingTime,
+          this.usersService.resolveDailyBriefingTime(user),
+        ),
+      )}`,
+      '',
+      this.bold('Elige a que hora quieres recibir tu resumen diario.'),
     ].join('\n');
   }
 
@@ -3100,6 +3245,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '',
       this.bold('Elige una configuracion para esta tarea.'),
     ].join('\n');
+  }
+
+  private formatBriefingTimeLabel(
+    dailyBriefingTime: string | null | undefined,
+    fallbackDailyBriefingTime: string,
+  ) {
+    const resolvedTime = dailyBriefingTime ?? fallbackDailyBriefingTime;
+
+    return dailyBriefingTime == null
+      ? `${resolvedTime} (usa valor familiar)`
+      : resolvedTime;
   }
 
   private buildHelpHomeResponse(): BotResponse {
@@ -3209,10 +3365,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ].join('\n');
       case 'alerts':
         return [
-          this.bold('Recordatorios'),
+          this.bold('Recordatorios y briefing'),
           '',
           this.bold('Configurar recordatorio predeterminado:'),
-          'Usa /alertas para decidir con cuanta anticipacion quieres que el bot te avise.',
+          'Usa /alertas para ajustar por separado tus recordatorios y la hora de tu briefing diario.',
           '',
           this.bold('Cambiar una sola tarea:'),
           'Entra a /editar, abre la tarea y toca `🔔 Alerta`.',

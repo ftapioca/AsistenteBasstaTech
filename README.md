@@ -35,7 +35,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Vista de detalle con `/ver N`
 - Notas por tarea con `/nota N`
 - Edicion contextual de tareas con `/editar`
-- Alertas configurables por usuario con `/alertas`
+- Alertas configurables por usuario con `/alertas`, separando recordatorios y briefing diario
 - Override de alertas por tarea desde el editor contextual
 - Renombrado de familia para administradores
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
@@ -108,7 +108,7 @@ La API HTTP queda en `http://localhost:3000`:
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
 - La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora`, `Nota` y `Alerta` desde menus contextuales
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
-- `/alertas` permite definir la anticipacion predeterminada de recordatorios por usuario
+- `/alertas` permite definir por separado la anticipacion predeterminada de recordatorios y la hora del briefing diario por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
 - El briefing diario ahora separa `Vencidas`, `Hoy`, `Proximas` y `Sin fecha` para evitar perder visibilidad de otras tareas abiertas
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
@@ -138,13 +138,28 @@ Comportamiento actual:
 - si no existe configuracion familiar, se usa la variable global
 - el valor `0` significa `Sin recordatorio`
 
-### Siguiente paso propuesto
+### Backlog priorizado
 
-Configuracion avanzada de alertas y modelado de subtareas:
+Prioridad actual de trabajo:
 
-- tareas repetitivas con recurrencia quincenal, semanal o mensual
-- subtareas como entidad independiente, no embebida en `description`
-- futura preferencia separada para briefing diario y recordatorios de tareas
+1. mejorar el flujo de edicion de tareas con botones inline de 2 niveles
+2. agregar nota opcional al wizard de `Nueva tarea`
+3. subtareas como entidad independiente, no embebida en `description`
+4. tareas repetitivas con recurrencia quincenal, semanal o mensual
+5. configuracion familiar avanzada para horarios y politicas de briefing/recordatorios
+6. exponer mas configuracion familiar en la UX/comandos
+7. agregar tests funcionales para Telegram, recordatorios y briefing
+
+Orden de implementacion recomendado:
+
+1. edicion de tareas
+2. wizard de `Nueva tarea` con nota
+3. tests funcionales de esos dos flujos
+4. subtareas
+5. recurrencia
+6. configuracion familiar avanzada
+7. UX/comandos de configuracion familiar
+8. tests de automatizaciones y configuracion
 
 ### Ejemplos de lenguaje natural
 

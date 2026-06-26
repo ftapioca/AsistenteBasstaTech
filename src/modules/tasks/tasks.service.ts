@@ -20,11 +20,13 @@ import { CreateTaskDto } from './dto/create-task.dto';
 
 type ActiveUser = NonNullable<Awaited<ReturnType<UsersService['findById']>>>;
 type TaskWithReminderContext = Task & {
-  assignedToUser: (User & {
-    family: {
-      settings: Settings | null;
-    };
-  }) | null;
+  assignedToUser:
+    | (User & {
+        family: {
+          settings: Settings | null;
+        };
+      })
+    | null;
 };
 type DailyBriefingTask = Pick<
   Task,
@@ -317,7 +319,11 @@ export class TasksService {
     return task;
   }
 
-  async updateTaskDueDate(userId: string, taskId: string, dueDate: string | null) {
+  async updateTaskDueDate(
+    userId: string,
+    taskId: string,
+    dueDate: string | null,
+  ) {
     const user = await this.usersService.requireActiveUser(userId);
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
@@ -470,9 +476,7 @@ export class TasksService {
   ) {
     const now = DateTime.now();
     const lowerBound = now.minus({ minutes: overdueGraceMinutes }).toJSDate();
-    const limit = now
-      .plus({ minutes: maxReminderMinutesBefore })
-      .toJSDate();
+    const limit = now.plus({ minutes: maxReminderMinutesBefore }).toJSDate();
 
     return this.prisma.task.findMany({
       where: {
@@ -677,15 +681,11 @@ export class TasksService {
 
   private assertCanEditTask(user: ActiveUser, task: Task) {
     if (task.familyId !== user.familyId) {
-      throw new ForbiddenException(
-        'No puedes editar tareas de otra familia.',
-      );
+      throw new ForbiddenException('No puedes editar tareas de otra familia.');
     }
 
     if (task.status !== TaskStatus.PENDING) {
-      throw new BadRequestException(
-        'Solo puedes editar tareas pendientes.',
-      );
+      throw new BadRequestException('Solo puedes editar tareas pendientes.');
     }
 
     if (user.role === UserRole.FAMILY_ADMIN) {
@@ -693,7 +693,10 @@ export class TasksService {
     }
 
     if (task.scope === TaskScope.FAMILY) {
-      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
+      if (
+        task.createdByUserId === user.id ||
+        task.assignedToUserId === user.id
+      ) {
         return;
       }
 
@@ -709,9 +712,7 @@ export class TasksService {
 
   private assertCanViewTask(user: ActiveUser, task: Task) {
     if (task.familyId !== user.familyId) {
-      throw new ForbiddenException(
-        'No puedes ver tareas de otra familia.',
-      );
+      throw new ForbiddenException('No puedes ver tareas de otra familia.');
     }
 
     if (user.role === UserRole.FAMILY_ADMIN) {

@@ -55,7 +55,12 @@ export class DailyBriefingService {
         '',
         ...formatTaskSection('📌 Proximas', payload.upcoming, timezone, now),
         '',
-        ...formatTaskSection('📝 Sin fecha', payload.withoutDueDate, timezone, now),
+        ...formatTaskSection(
+          '📝 Sin fecha',
+          payload.withoutDueDate,
+          timezone,
+          now,
+        ),
         '',
         `Tienes ${payload.totalPending} tareas pendientes en total.`,
       ];
@@ -135,7 +140,10 @@ function formatBriefingTaskLine(
 
   const due = DateTime.fromJSDate(task.dueDate).setZone(timezone);
   if (due < now) {
-    const diffMinutes = Math.max(1, Math.round(now.diff(due, 'minutes').minutes));
+    const diffMinutes = Math.max(
+      1,
+      Math.round(now.diff(due, 'minutes').minutes),
+    );
     const label =
       diffMinutes < 60
         ? `${diffMinutes} min`

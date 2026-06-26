@@ -36,7 +36,6 @@ async function main() {
       phoneNumber: '+56911111111',
       role: UserRole.FAMILY_ADMIN,
       timezone: 'America/Santiago',
-      dailyBriefingTime: '08:30',
     },
   });
 
@@ -51,7 +50,6 @@ async function main() {
       phoneNumber: '+56922222222',
       role: UserRole.USER,
       timezone: 'America/Santiago',
-      dailyBriefingTime: '08:30',
     },
   });
 
