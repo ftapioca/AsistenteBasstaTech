@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
-import { existsSync } from 'node:fs';
 import { validateEnvironment } from './config/env.validation';
 import { AiModule } from './modules/ai/ai.module';
 import { DailyBriefingModule } from './modules/daily-briefing/daily-briefing.module';
@@ -17,7 +16,7 @@ import { UsersModule } from './modules/users/users.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: resolveEnvFiles(),
+      envFilePath: process.env.ENV_FILE?.trim() || '.env',
       validate: validateEnvironment,
     }),
     ScheduleModule.forRoot(),
@@ -33,13 +32,3 @@ import { UsersModule } from './modules/users/users.module';
   ],
 })
 export class AppModule {}
-
-function resolveEnvFiles() {
-  const envFile = process.env.ENV_FILE?.trim();
-  if (envFile) {
-    return [envFile];
-  }
-
-  const candidates = ['.env.local', '.env'];
-  return candidates.filter((file) => existsSync(file));
-}
