@@ -69,19 +69,20 @@ Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear
 Para trabajar sin tocar produccion, usa un segundo bot de Telegram con polling local y un archivo de entorno separado:
 
 ```bash
-cp .env.local.example .env.local
+cp .env.example .env.local
 ```
 
 Ajusta al menos:
 
 - `TELEGRAM_BOT_TOKEN` del bot de pruebas
-- `DATABASE_URL` de una base local separada si quieres aislar tambien los datos
+- `DATABASE_URL="postgresql://postgres:postgres@localhost:5432/bot_asistente_familiar_local?schema=public"`
 - deja vacios `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET` y `RENDER_EXTERNAL_URL` para forzar `polling`
 
 Arranque recomendado para ese bot:
 
 ```bash
 docker compose up -d db
+docker compose exec db psql -U postgres -c 'CREATE DATABASE bot_asistente_familiar_local;'
 npm run prisma:deploy:localbot
 npm run prisma:seed:localbot
 npm run start:dev:localbot
@@ -91,7 +92,7 @@ Notas:
 
 - `start:dev:localbot` carga `.env.local` en vez de `.env`
 - `prisma:deploy:localbot` y `prisma:seed:localbot` tambien cargan `.env.local`
-- si tu `DATABASE_URL` local apunta a otra base, crea esa base antes de correr Prisma
+- si el comando `CREATE DATABASE` falla porque ya existe, puedes seguir
 - el teclado inferior de Telegram y el historial de mensajes quedaran aislados en el bot de pruebas
 
 ### Arranque local
