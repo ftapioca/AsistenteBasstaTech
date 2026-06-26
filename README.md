@@ -64,6 +64,36 @@ Variables clave:
 
 Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear tareas.
 
+### Bot local de pruebas
+
+Para trabajar sin tocar produccion, usa un segundo bot de Telegram con polling local y un archivo de entorno separado:
+
+```bash
+cp .env.local.example .env.local
+```
+
+Ajusta al menos:
+
+- `TELEGRAM_BOT_TOKEN` del bot de pruebas
+- `DATABASE_URL` de una base local separada si quieres aislar tambien los datos
+- deja vacios `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET` y `RENDER_EXTERNAL_URL` para forzar `polling`
+
+Arranque recomendado para ese bot:
+
+```bash
+docker compose up -d db
+npm run prisma:deploy:localbot
+npm run prisma:seed:localbot
+npm run start:dev:localbot
+```
+
+Notas:
+
+- `start:dev:localbot` carga `.env.local` en vez de `.env`
+- `prisma:deploy:localbot` y `prisma:seed:localbot` tambien cargan `.env.local`
+- si tu `DATABASE_URL` local apunta a otra base, crea esa base antes de correr Prisma
+- el teclado inferior de Telegram y el historial de mensajes quedaran aislados en el bot de pruebas
+
 ### Arranque local
 
 ```bash
