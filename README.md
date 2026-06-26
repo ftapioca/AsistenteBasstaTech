@@ -102,12 +102,16 @@ La API HTTP queda en `http://localhost:3000`:
 - Las tareas del dia aparecen bajo `🗓️ Hoy`
 - El resto aparece bajo `Otras tareas`
 - Las tareas con nota muestran el indicador `📝`
+- El boton inferior principal para listar pendientes ahora aparece como `Ver tareas`
 - `/ver N` muestra el detalle de una tarea y su nota actual
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
-- La lista de pendientes muestra acciones contextuales para `Completar varias`, `Editar` y `Eliminar varias`
+- La lista de pendientes muestra acciones contextuales para `Ver tarea`, `Completar varias` y `Eliminar varias`
+- `Ver tarea` abre una seleccion inline de tareas, muestra el detalle y desde ahi permite `Marcar como completada` o `Editar`
+- Al marcar una tarea como completada desde `Ver tarea`, el bot pide confirmacion antes de cerrar la accion
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
 - La edicion de tareas ahora usa una navegacion inline de `2 niveles`: primero eliges area (`Contenido` o `Programacion`) y luego la accion concreta
-- La edicion de tareas permite cambiar `Titulo`, `Fecha/Hora`, `Nota` y `Alerta` desde menus contextuales
+- En `Contenido`, la edicion permite cambiar `Titulo`, `Tipo` (`Personal` o `Familiar`) y `Nota`
+- En `Programacion`, la edicion permite cambiar `Fecha/Hora` y `Alerta`
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
 - El wizard de `/nueva` ahora pregunta si quieres agregar una nota despues de definir `Fecha/Hora`; si respondes que si, permite escribirla antes de pedir la prioridad
 - `/alertas` permite definir por separado la anticipacion predeterminada de recordatorios y la hora del briefing diario por usuario
@@ -152,7 +156,7 @@ Prioridad actual de trabajo:
 
 Orden de implementacion recomendado:
 
-1. tests funcionales de `edicion` y `wizard`
+1. tests funcionales de `edicion`, `wizard` y `ver tarea`
 2. subtareas
 3. recurrencia
 4. configuracion familiar avanzada
