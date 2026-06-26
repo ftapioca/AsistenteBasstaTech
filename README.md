@@ -30,7 +30,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Renombrado de familia para administradores
 - Resolucion de `/hecho N` y `/eliminar N` contra la ultima lista mostrada
 - Recordatorios automaticos
-- Briefing diario sin duplicados
+- Briefing diario sin duplicados y con resumen real de pendientes
 
 ### Variables de entorno
 
@@ -100,6 +100,7 @@ La API HTTP queda en `http://localhost:3000`:
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
 - `/alertas` permite definir la anticipacion predeterminada de recordatorios por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
+- El briefing diario ahora separa `Vencidas`, `Hoy`, `Proximas` y `Sin fecha` para evitar perder visibilidad de otras tareas abiertas
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
 - `Editar familia` ahora muestra una pantalla inicial de acciones: `Renombrar familia`, `Agregar miembro`, `Quitar miembro` y `Cerrar`
 - `Quitar miembro` abre un segundo paso con seleccion multiple de integrantes y boton `Eliminar`
@@ -131,9 +132,9 @@ Comportamiento actual:
 
 Configuracion avanzada de alertas y modelado de subtareas:
 
-- presets y texto mas explicito para alertas por tarea segun contexto de vencimiento
-- futura preferencia separada para briefing diario y recordatorios de tareas
+- tareas repetitivas con recurrencia quincenal, semanal o mensual
 - subtareas como entidad independiente, no embebida en `description`
+- futura preferencia separada para briefing diario y recordatorios de tareas
 
 ### Ejemplos de lenguaje natural
 

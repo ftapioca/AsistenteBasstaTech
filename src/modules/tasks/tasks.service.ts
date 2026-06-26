@@ -26,6 +26,10 @@ type TaskWithReminderContext = Task & {
     };
   }) | null;
 };
+type DailyBriefingTask = Pick<
+  Task,
+  'id' | 'title' | 'scope' | 'dueDate' | 'priority' | 'description'
+>;
 type PendingAction =
   | {
       type: 'CREATE_TASK_CONFIRMATION';
@@ -549,11 +553,42 @@ export class TasksService {
   }
 
   async getDailyBriefingPayload(userId: string) {
-    const today = await this.listTodayTasks(userId);
+    const user = await this.usersService.requireActiveUser(userId);
+    const timezone = this.usersService.resolveTimezone(user);
+    const now = DateTime.now().setZone(timezone);
+    const pendingTasks = await this.listPendingTasks(userId);
+
+    const overdue: DailyBriefingTask[] = [];
+    const today: DailyBriefingTask[] = [];
+    const upcoming: DailyBriefingTask[] = [];
+    const withoutDueDate: DailyBriefingTask[] = [];
+
+    pendingTasks.forEach((task) => {
+      if (!task.dueDate) {
+        withoutDueDate.push(task);
+        return;
+      }
+
+      const due = DateTime.fromJSDate(task.dueDate).setZone(timezone);
+      if (due < now) {
+        overdue.push(task);
+        return;
+      }
+
+      if (due.hasSame(now, 'day')) {
+        today.push(task);
+        return;
+      }
+
+      upcoming.push(task);
+    });
 
     return {
-      personal: today.filter((task) => task.scope === TaskScope.PERSONAL),
-      family: today.filter((task) => task.scope === TaskScope.FAMILY),
+      overdue,
+      today,
+      upcoming,
+      withoutDueDate,
+      totalPending: pendingTasks.length,
     };
   }
 
