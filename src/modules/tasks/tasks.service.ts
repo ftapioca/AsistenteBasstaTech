@@ -41,6 +41,23 @@ type PendingAction =
     }
   | {
       type: 'CREATE_FAMILY_CONFIRMATION';
+      step: 'FAMILY_NAME' | 'CONFIRM';
+      phoneNumber: string;
+      telegramUserId: string;
+      telegramChatId: string;
+      telegramUsername?: string | null;
+      fallbackName: string;
+      familyName?: string;
+    }
+  | {
+      type: 'JOIN_FAMILY_INVITE';
+      familyId: string;
+      familyName: string;
+    }
+  | {
+      type: 'JOIN_FAMILY_CONFIRMATION';
+      familyId: string;
+      familyName: string;
       phoneNumber: string;
       telegramUserId: string;
       telegramChatId: string;
@@ -86,6 +103,11 @@ type PendingAction =
       type: 'FAMILY_REMOVE_WIZARD';
       memberIds: string[];
       selectedMemberIds: string[];
+    }
+  | {
+      type: 'FAMILY_TRANSFER_ADMIN_WIZARD';
+      memberIds: string[];
+      selectedMemberId?: string;
     }
   | {
       type: 'EDIT_TASK_SELECTION';

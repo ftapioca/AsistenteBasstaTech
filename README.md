@@ -44,7 +44,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 
 ### Variables de entorno
 
-Copia `.env.example` a `.env` y completa:
+Copia `.env.example` a `.env` solo para un entorno tipo deploy o para documentar valores base:
 
 ```bash
 cp .env.example .env
@@ -64,6 +64,12 @@ Variables clave:
 
 Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear tareas.
 
+Importante:
+
+- no mezcles un `TELEGRAM_BOT_TOKEN` productivo con una `DATABASE_URL` local
+- si configuras `TELEGRAM_WEBHOOK_URL` o `RENDER_EXTERNAL_URL`, la app ahora rechaza `DATABASE_URL` apuntando a `localhost`
+- para desarrollo local con el bot de pruebas, usa `.env.local`, no `.env`
+
 ### Bot local de pruebas
 
 Para trabajar sin tocar produccion, usa un segundo bot de Telegram con polling local y un archivo de entorno separado:
@@ -77,6 +83,7 @@ Ajusta al menos:
 - `TELEGRAM_BOT_TOKEN` del bot de pruebas
 - `DATABASE_URL="postgresql://postgres:postgres@localhost:5432/bot_asistente_familiar_local?schema=public"`
 - deja vacios `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET` y `RENDER_EXTERNAL_URL` para forzar `polling`
+- no cambies `ALLOW_TELEGRAM_POLLING` en archivos compartidos; el arranque local lo habilita solo en los scripts `start:*:localbot`
 
 Arranque recomendado para ese bot:
 
@@ -91,19 +98,21 @@ npm run start:dev:localbot
 Notas:
 
 - `start:dev:localbot` carga `.env.local` en vez de `.env`
+- `start:dev:localbot` y `start:localbot` habilitan `ALLOW_TELEGRAM_POLLING=true` solo para el proceso local
 - `prisma:deploy:localbot` y `prisma:seed:localbot` tambien cargan `.env.local`
 - si el comando `CREATE DATABASE` falla porque ya existe, puedes seguir
+- si no hay webhook configurado y `ALLOW_TELEGRAM_POLLING=false`, Telegram queda deshabilitado para evitar consumir mensajes del bot equivocado
 - el teclado inferior de Telegram y el historial de mensajes quedaran aislados en el bot de pruebas
 
 ### Arranque local
 
 ```bash
 npm install
-cp .env.example .env
+cp .env.example .env.local
 docker compose up -d db
-npm run prisma:deploy
-npm run prisma:seed
-npm run start:dev
+npm run prisma:deploy:localbot
+npm run prisma:seed:localbot
+npm run start:dev:localbot
 ```
 
 La API HTTP queda en `http://localhost:3000`:

@@ -126,9 +126,13 @@ const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
 const CALLBACK_FAMILY_CLOSE = 'family:close';
 const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
+const CALLBACK_FAMILY_INVITE_LINK = 'family:invite_link';
+const CALLBACK_FAMILY_SKIP_ONBOARDING = 'family:skip_onboarding';
 const CALLBACK_FAMILY_RENAME = 'family:rename';
 const CALLBACK_FAMILY_START_REMOVE = 'family:start_remove';
 const CALLBACK_FAMILY_CONFIRM_REMOVE = 'family:confirm_remove';
+const CALLBACK_FAMILY_START_TRANSFER = 'family:start_transfer';
+const FAMILY_INVITE_START_PREFIX = 'join-family-';
 
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
@@ -160,6 +164,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (webhookBaseUrl) {
       this.transportMode = 'webhook';
       void this.configureWebhook(webhookBaseUrl);
+      return;
+    }
+
+    const allowPolling = this.configService.get<boolean>(
+      'ALLOW_TELEGRAM_POLLING',
+    );
+    if (!allowPolling) {
+      this.logger.warn(
+        'Telegram deshabilitado: no hay webhook configurado y ALLOW_TELEGRAM_POLLING=false.',
+      );
       return;
     }
 
@@ -401,6 +415,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleStart(ctx: BotReplyContext) {
+    const inviteReply = await this.tryHandleFamilyInviteStart(ctx);
+    if (inviteReply) {
+      return inviteReply;
+    }
+
     const registeredUser = await this.usersService.findByTelegramUserId(
       String(ctx.from.id),
     );
@@ -418,6 +437,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       Markup.keyboard([[Markup.button.contactRequest('Compartir mi contacto')]])
         .oneTime()
         .resize(),
+    );
+
+    return 'Quedo atento a tu contacto para continuar.';
+  }
+
+  private async tryHandleFamilyInviteStart(ctx: BotReplyContext) {
+    const payload = this.getStartPayload(ctx);
+    if (!payload?.startsWith(FAMILY_INVITE_START_PREFIX)) {
+      return null;
+    }
+
+    const familyId = payload.replace(FAMILY_INVITE_START_PREFIX, '').trim();
+    if (!familyId) {
+      return null;
+    }
+
+    const linkedUser = await this.usersService.findByTelegramUserId(
+      String(ctx.from.id),
+    );
+    if (linkedUser) {
+      return `Ya estas vinculado a la familia ${linkedUser.family.name}.`;
+    }
+
+    const family = await this.usersService.findFamilyById(familyId);
+    if (!family) {
+      throw new BadRequestException('La invitacion ya no esta disponible.');
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'JOIN_FAMILY_INVITE',
+      familyId: family.id,
+      familyName: family.name,
+    });
+
+    await ctx.reply(
+      [
+        this.bold(`Te invitaron a unirte a ${family.name}.`),
+        '',
+        this.bold('Comparte tu numero usando el boton de contacto.'),
+      ].join('\n'),
+      this.withHtml(
+        Markup.keyboard([[Markup.button.contactRequest('Compartir mi contacto')]])
+          .oneTime()
+          .resize(),
+      ),
     );
 
     return 'Quedo atento a tu contacto para continuar.';
@@ -443,6 +507,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       telegramUsername: ctx.from.username,
       fallbackName: ctx.from.first_name || contact.first_name || 'Usuario',
     };
+    const joinInviteReply = await this.tryHandleJoinFamilyInviteContact(
+      ctx,
+      linkInput,
+    );
+    if (joinInviteReply) {
+      return joinInviteReply;
+    }
+
     const existingUser = await this.usersService.findByPhoneNumberForLink(
       contact.phone_number,
     );
@@ -450,17 +522,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (!existingUser) {
       await this.tasksService.setPendingAction(String(ctx.chat.id), {
         type: 'CREATE_FAMILY_CONFIRMATION',
+        step: 'FAMILY_NAME',
         ...linkInput,
       });
 
-      return [
-        this.bold('No encontre una cuenta existente para ese numero.'),
-        '',
-        this.bold(
-          'Si continuas, creare una nueva familia y te dejare como administrador.',
-        ),
-        this.bold('Responde "si" para continuar o "no" para cancelar.'),
-      ].join('\n');
+      return {
+        text: [
+          this.bold('No encontre una cuenta existente para ese numero.'),
+          '',
+          this.bold('Escribe el nombre que quieres para tu familia.'),
+          this.bold('Si prefieres salir, responde "Cancelar".'),
+        ].join('\n'),
+        extra: this.withHtml(),
+      };
     }
 
     const user = await this.usersService.linkExistingTelegramAccount(
@@ -471,7 +545,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
 
     if (user.role === UserRole.FAMILY_ADMIN) {
-      return `Bienvenido ${user.name}. Se creo ${user.family.name} y quedaste como administrador.\n\nUsa /crearusuario Nombre +56912345678 para agregar miembros.`;
+      return this.buildFamilyCreatedResponse(user.name, user.family.name);
     }
 
     return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
@@ -733,6 +807,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleNaturalLanguage(ctx: BotTextContext) {
+    const createFamilyReply = await this.tryHandleCreateFamilySetup(ctx);
+    if (createFamilyReply) {
+      return createFamilyReply;
+    }
+
+    const confirmationReply = await this.tryHandlePendingConfirmation(ctx);
+    if (confirmationReply) {
+      return confirmationReply;
+    }
+
     const user = await this.requireRegisteredUser(ctx);
     const menuActionReply = await this.tryHandleMenuAction(ctx);
     if (menuActionReply) {
@@ -765,14 +849,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const editReply = await this.tryHandleEditTaskInput(ctx, user.id);
     if (editReply) {
       return editReply;
-    }
-
-    const confirmationReply = await this.tryHandlePendingConfirmation(
-      ctx,
-      user.id,
-    );
-    if (confirmationReply) {
-      return confirmationReply;
     }
 
     const timezone = this.usersService.resolveTimezone(user);
@@ -978,13 +1054,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const reply = await handler;
       const payload = this.normalizeBotResponse(reply);
       const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-      await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      await ctx.reply(
+        payload.text,
+        this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
       this.logger.warn(message);
       const extra = await this.getDefaultReplyMarkup(ctx);
-      await ctx.reply(message, extra);
+      await ctx.reply(message, this.resolveReplyExtra(message, undefined, extra));
     }
   }
 
@@ -994,6 +1073,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return reply;
+  }
+
+  private resolveReplyExtra(
+    text: string,
+    preferredExtra?: unknown,
+    fallbackExtra?: unknown,
+  ) {
+    const baseExtra = preferredExtra ?? fallbackExtra;
+    if (!text.includes('<b>')) {
+      return baseExtra;
+    }
+
+    return this.withHtml(baseExtra);
   }
 
   private normalizeDueDate(dueDate?: string | null) {
@@ -1040,7 +1132,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async tryHandlePendingConfirmation(
     ctx: BotTextContext,
-    userId: string,
+    userId?: string,
   ) {
     const text = ctx.message.text.trim().toLowerCase();
     if (!['si', 'sí', 'no', 'cancelar'].includes(text)) {
@@ -1056,6 +1148,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (
       pendingAction.type !== 'CREATE_FAMILY_CONFIRMATION' &&
+      pendingAction.type !== 'JOIN_FAMILY_CONFIRMATION' &&
       pendingAction.type !== 'CREATE_TASK_CONFIRMATION'
     ) {
       return null;
@@ -1069,7 +1162,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (pendingAction.type === 'CREATE_FAMILY_CONFIRMATION') {
       const user = await this.usersService.createFamilyAdmin({
-        familyName: `Familia de ${pendingAction.fallbackName}`,
+        familyName:
+          pendingAction.familyName?.trim() ||
+          `Familia de ${pendingAction.fallbackName}`,
         name: pendingAction.fallbackName,
         phoneNumber: pendingAction.phoneNumber,
         telegramUserId: pendingAction.telegramUserId,
@@ -1077,11 +1172,26 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         telegramUsername: pendingAction.telegramUsername,
       });
 
-      return `Bienvenido ${user.name}. Se creo ${user.family.name} y quedaste como administrador.\n\nUsa /crearusuario Nombre +56912345678 para agregar miembros.`;
+      return this.buildFamilyCreatedResponse(user.name, user.family.name);
     }
 
+    if (pendingAction.type === 'JOIN_FAMILY_CONFIRMATION') {
+      const user = await this.usersService.joinFamilyByInvite({
+        familyId: pendingAction.familyId,
+        name: pendingAction.fallbackName,
+        phoneNumber: pendingAction.phoneNumber,
+        telegramUserId: pendingAction.telegramUserId,
+        telegramChatId: pendingAction.telegramChatId,
+        telegramUsername: pendingAction.telegramUsername,
+      });
+
+      await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
+      return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
+    }
+
+    const confirmedUserId = userId ?? (await this.requireRegisteredUser(ctx)).id;
     const task = await this.tasksService.createTaskForUser(
-      userId,
+      confirmedUserId,
       pendingAction.dto,
     );
 
@@ -1090,6 +1200,112 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return `Listo. Cree otra tarea igual: "${task.title}".`;
+  }
+
+  private async tryHandleCreateFamilySetup(ctx: BotTextContext) {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (
+      !pendingAction ||
+      pendingAction.type !== 'CREATE_FAMILY_CONFIRMATION' ||
+      pendingAction.step !== 'FAMILY_NAME'
+    ) {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    if (text.toLowerCase() === 'cancelar') {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, no hice ningun cambio.';
+    }
+
+    if (!text) {
+      return {
+        text: [
+          this.bold('Necesito un nombre para crear la familia.'),
+          this.bold('Escribe el nombre o responde "Cancelar".'),
+        ].join('\n'),
+        extra: this.withHtml(),
+      };
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      ...pendingAction,
+      step: 'CONFIRM',
+      familyName: text,
+    });
+
+    return {
+      text: [
+        this.bold(`La familia se creara como "${this.escapeHtml(text)}".`),
+        '',
+        this.bold(
+          'Si continuas, creare la familia y te dejare como administrador.',
+        ),
+        this.bold('Responde "si" para continuar o "no" para cancelar.'),
+      ].join('\n'),
+      extra: this.withHtml(),
+    };
+  }
+
+  private async tryHandleJoinFamilyInviteContact(
+    ctx: BotContactContext,
+    linkInput: {
+      phoneNumber: string;
+      telegramUserId: string;
+      telegramChatId: string;
+      telegramUsername?: string;
+      fallbackName: string;
+    },
+  ) {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (!pendingAction || pendingAction.type !== 'JOIN_FAMILY_INVITE') {
+      return null;
+    }
+
+    const existingUser = await this.usersService.findByPhoneNumberForLink(
+      linkInput.phoneNumber,
+    );
+    if (existingUser) {
+      if (existingUser.familyId !== pendingAction.familyId) {
+        throw new BadRequestException(
+          'Ese telefono ya pertenece a otra familia.',
+        );
+      }
+
+      const user = await this.usersService.linkExistingTelegramAccount(
+        existingUser.id,
+        linkInput,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
+      return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
+    }
+
+    await this.tasksService.setPendingAction(String(ctx.chat.id), {
+      type: 'JOIN_FAMILY_CONFIRMATION',
+      familyId: pendingAction.familyId,
+      familyName: pendingAction.familyName,
+      phoneNumber: linkInput.phoneNumber,
+      telegramUserId: linkInput.telegramUserId,
+      telegramChatId: linkInput.telegramChatId,
+      telegramUsername: linkInput.telegramUsername,
+      fallbackName: linkInput.fallbackName,
+    });
+
+    return {
+      text: [
+        this.bold(
+          `Te agregare a la familia "${this.escapeHtml(pendingAction.familyName)}".`,
+        ),
+        '',
+        this.bold('Responde "si" para continuar o "no" para cancelar.'),
+      ].join('\n'),
+      extra: this.withHtml(),
+    };
   }
 
   private async tryHandleMenuAction(ctx: BotTextContext) {
@@ -1135,7 +1351,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
       const payload = this.normalizeBotResponse(reply);
       const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-      await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+      await ctx.reply(
+        payload.text,
+        this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
@@ -1172,7 +1391,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1210,7 +1432,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1248,7 +1473,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1286,7 +1514,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1320,7 +1551,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1358,7 +1592,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       if (result.reply) {
         const payload = this.normalizeBotResponse(result.reply);
         const defaultExtra = await this.getDefaultReplyMarkup(ctx);
-        await ctx.reply(payload.text, payload.extra ?? defaultExtra);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
       }
     } catch (error) {
       const message =
@@ -1918,6 +2155,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (data === CALLBACK_FAMILY_ADD_MEMBER) {
+      const inviteLink = await this.buildFamilyInviteLink(user.familyId);
+      return {
+        answerText: 'Link de invitacion',
+        clearMarkup: true,
+        reply: {
+          text: [
+            this.bold('Link de invitacion familiar'),
+            '',
+            'Comparte este link con las personas que quieres sumar a la familia:',
+            this.escapeHtml(inviteLink),
+            '',
+            'Cuando abran el link, el bot les pedira compartir su contacto para vincularlos.',
+          ].join('\n'),
+          extra: this.withHtml(this.buildFamilyInviteKeyboard(inviteLink)),
+        },
+      };
+    }
+
+    if (data === CALLBACK_FAMILY_INVITE_LINK) {
       await this.tasksService.setPendingAction(String(ctx.chat.id), {
         type: 'ADD_MEMBER_WIZARD',
         step: 'NAME',
@@ -1932,6 +2188,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.bold('Primero, escribe el nombre con el que quieres guardarlo.'),
           this.bold('Despues te pedire que compartas su contacto.'),
         ].join('\n'),
+      };
+    }
+
+    if (data === CALLBACK_FAMILY_SKIP_ONBOARDING) {
+      return {
+        answerText: 'Omitido',
+        clearMarkup: true,
       };
     }
 
@@ -1963,6 +2226,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         answerText: 'Quitar miembro',
         editText: this.formatFamilyRemovalPrompt(members, []),
         editExtra: this.withHtml(this.buildFamilyRemovalKeyboard(members, [])),
+      };
+    }
+
+    if (data === CALLBACK_FAMILY_START_TRANSFER) {
+      const members = await this.usersService.listTransferableAdminUsers(
+        user.id,
+      );
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'FAMILY_TRANSFER_ADMIN_WIZARD',
+        memberIds: members.map((member) => member.id),
+        selectedMemberId: undefined,
+      });
+
+      return {
+        answerText: 'Traspasar administracion',
+        editText: this.formatFamilyTransferPrompt(members),
+        editExtra: this.withHtml(
+          this.buildFamilyTransferKeyboard(members, undefined),
+        ),
       };
     }
 
@@ -2033,6 +2315,75 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         editText: this.formatFamilyManagementText(user.family.name),
         editExtra: this.withHtml(this.buildFamilyManagementKeyboard()),
         reply: `Listo. Quite ${removedUsers.length} integrante${removedUsers.length === 1 ? '' : 's'} de la familia.`,
+      };
+    }
+
+    if (data.startsWith('family:transfer:select:')) {
+      const targetUserId = data.replace('family:transfer:select:', '');
+      const pendingAction = await this.tasksService.getPendingAction(
+        String(ctx.chat.id),
+      );
+      const members = await this.usersService.listTransferableAdminUsers(
+        user.id,
+      );
+      if (
+        !pendingAction ||
+        pendingAction.type !== 'FAMILY_TRANSFER_ADMIN_WIZARD'
+      ) {
+        throw new BadRequestException(
+          'No hay un traspaso de administracion activo.',
+        );
+      }
+
+      const target = members.find((member) => member.id === targetUserId);
+      if (!target) {
+        throw new BadRequestException(
+          'Ese usuario ya no esta disponible para recibir la administracion.',
+        );
+      }
+
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'FAMILY_TRANSFER_ADMIN_WIZARD',
+        memberIds: pendingAction.memberIds,
+        selectedMemberId: targetUserId,
+      });
+
+      return {
+        answerText: 'Seleccionado',
+        editText: this.formatFamilyTransferConfirmation(target.name),
+        editExtra: this.withHtml(
+          this.buildFamilyTransferConfirmKeyboard(targetUserId),
+        ),
+      };
+    }
+
+    if (data.startsWith('family:transfer:confirm:')) {
+      const targetUserId = data.replace('family:transfer:confirm:', '');
+      const pendingAction = await this.tasksService.getPendingAction(
+        String(ctx.chat.id),
+      );
+      if (
+        !pendingAction ||
+        pendingAction.type !== 'FAMILY_TRANSFER_ADMIN_WIZARD' ||
+        pendingAction.selectedMemberId !== targetUserId
+      ) {
+        throw new BadRequestException(
+          'No hay un traspaso de administracion activo.',
+        );
+      }
+
+      const newAdmin = await this.usersService.transferFamilyAdministration(
+        user.id,
+        targetUserId,
+      );
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+      return {
+        answerText: 'Administracion transferida',
+        editText:
+          'Listo. La administracion de la familia fue transferida correctamente.',
+        clearMarkup: true,
+        reply: `Listo. ${newAdmin?.name ?? 'La persona seleccionada'} ahora es quien administra la familia.`,
       };
     }
 
@@ -3137,14 +3488,84 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       .replace(/>/g, '&gt;');
   }
 
+  private buildFamilyCreatedResponse(userName: string, familyName: string) {
+    return {
+      text: [
+        `Bienvenido ${this.escapeHtml(userName)}. Se creo ${this.escapeHtml(familyName)} y quedaste como administrador.`,
+        '',
+        '¿Quieres generar un link para invitar integrantes ahora?',
+      ].join('\n'),
+      extra: this.withHtml(this.buildFamilyCreatedKeyboard()),
+    };
+  }
+
+  private buildFamilyCreatedKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '➕ Agregar usuarios',
+          CALLBACK_FAMILY_ADD_MEMBER,
+        ),
+      ],
+      [Markup.button.callback('Omitir', CALLBACK_FAMILY_SKIP_ONBOARDING)],
+    ]);
+  }
+
+  private buildFamilyInviteKeyboard(inviteLink: string) {
+    return Markup.inlineKeyboard([
+      [Markup.button.url('Abrir link', inviteLink)],
+      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
+    ]);
+  }
+
+  private async buildFamilyInviteLink(familyId: string) {
+    const username = await this.getBotUsername();
+    return `https://t.me/${username}?start=${FAMILY_INVITE_START_PREFIX}${familyId}`;
+  }
+
+  private async getBotUsername() {
+    if (!this.bot) {
+      throw new BadRequestException('Bot no disponible.');
+    }
+
+    if (this.bot.botInfo?.username) {
+      return this.bot.botInfo.username;
+    }
+
+    const botInfo = await this.bot.telegram.getMe();
+    this.bot.botInfo = botInfo;
+    return botInfo.username;
+  }
+
+  private getStartPayload(ctx: BotReplyContext) {
+    const message = (ctx as BotTextContext).message;
+    if (!message || typeof message.text !== 'string') {
+      return null;
+    }
+
+    const [command, ...rest] = message.text.trim().split(/\s+/);
+    if (command !== '/start' || rest.length === 0) {
+      return null;
+    }
+
+    return rest.join(' ').trim() || null;
+  }
+
   private formatFamilyManagementText(familyName: string) {
     return [
       this.bold(`Gestion de ${familyName}`),
       '',
       this.bold('¿Que quieres hacer?'),
       '',
-      this.bold('Agregar miembros:'),
-      this.escapeHtml('Usa /crearusuario Nombre +56912345678'),
+      this.bold('Invitar miembros:'),
+      this.escapeHtml(
+        'Genera un link para compartir y que cada persona se vincule sola.',
+      ),
+      '',
+      this.bold('Administracion:'),
+      this.escapeHtml(
+        'Puedes renombrar la familia, quitar integrantes o traspasar la administracion.',
+      ),
     ].join('\n');
   }
 
@@ -3153,7 +3574,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       [Markup.button.callback('✏️ Renombrar familia', CALLBACK_FAMILY_RENAME)],
       [
         Markup.button.callback(
-          '🆕 Agregar miembro',
+          '🔗 Link de invitacion',
           CALLBACK_FAMILY_ADD_MEMBER,
         ),
       ],
@@ -3163,7 +3584,80 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           CALLBACK_FAMILY_START_REMOVE,
         ),
       ],
+      [
+        Markup.button.callback(
+          '👑 Traspasar administracion',
+          CALLBACK_FAMILY_START_TRANSFER,
+        ),
+      ],
       [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
+    ]);
+  }
+
+  private formatFamilyTransferPrompt(members: Array<{ id: string; name: string }>) {
+    if (members.length === 0) {
+      return this.bold(
+        'No hay integrantes vinculados al bot disponibles para recibir la administracion.',
+      );
+    }
+
+    const lines = members.map(
+      (member, index) =>
+        `${this.bold(`${index + 1}.`)} ${this.escapeHtml(member.name)}`,
+    );
+
+    return [
+      this.bold('Traspasar administracion'),
+      '',
+      this.bold(
+        'Selecciona a una persona ya vinculada al bot para traspasar la administracion.',
+      ),
+      '',
+      ...lines,
+    ].join('\n');
+  }
+
+  private formatFamilyTransferConfirmation(targetName: string) {
+    return [
+      this.bold('Confirmar traspaso'),
+      '',
+      `La administracion pasara a ${this.bold(targetName)}.`,
+      this.bold('Despues de confirmar, dejaras de ser administrador.'),
+      this.bold('¿Quieres continuar?'),
+    ].join('\n');
+  }
+
+  private buildFamilyTransferKeyboard(
+    members: Array<{ id: string; name: string }>,
+    selectedMemberId?: string,
+  ) {
+    const rows = members.map((member) => [
+      Markup.button.callback(
+        `${selectedMemberId === member.id ? '✅ ' : ''}${member.name}`,
+        `family:transfer:select:${member.id}`,
+      ),
+    ]);
+
+    rows.push([
+      Markup.button.callback('⬅️ Volver', CALLBACK_FAMILY_CANCEL),
+      Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+    ]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private buildFamilyTransferConfirmKeyboard(targetUserId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✅ Confirmar traspaso',
+          `family:transfer:confirm:${targetUserId}`,
+        ),
+      ],
+      [
+        Markup.button.callback('⬅️ Volver', CALLBACK_FAMILY_CANCEL),
+        Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+      ],
     ]);
   }
 

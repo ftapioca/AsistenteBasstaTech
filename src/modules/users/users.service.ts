@@ -130,6 +130,15 @@ export class UsersService {
     });
   }
 
+  async findFamilyById(familyId: string) {
+    return this.prisma.family.findUnique({
+      where: { id: familyId },
+      include: {
+        settings: true,
+      },
+    });
+  }
+
   async listManagedUsers(adminUserId: string) {
     const admin = await this.requireActiveUser(adminUserId);
     if (admin.role !== UserRole.FAMILY_ADMIN) {
@@ -143,6 +152,26 @@ export class UsersService {
         familyId: admin.familyId,
         isActive: true,
         role: UserRole.USER,
+      },
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  async listTransferableAdminUsers(adminUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede traspasar la administracion.',
+      );
+    }
+
+    return this.prisma.user.findMany({
+      where: {
+        familyId: admin.familyId,
+        isActive: true,
+        role: UserRole.USER,
+        telegramUserId: { not: null },
+        telegramChatId: { not: null },
       },
       orderBy: { name: 'asc' },
     });
@@ -191,6 +220,48 @@ export class UsersService {
     }
 
     return removedUsers;
+  }
+
+  async transferFamilyAdministration(adminUserId: string, targetUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede traspasar la administracion.',
+      );
+    }
+
+    const target = await this.prisma.user.findUnique({
+      where: { id: targetUserId },
+    });
+
+    if (!target || !target.isActive || target.familyId !== admin.familyId) {
+      throw new NotFoundException('Usuario no encontrado en tu familia.');
+    }
+
+    if (target.role === UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Esa persona ya es administradora de la familia.',
+      );
+    }
+
+    if (!target.telegramUserId || !target.telegramChatId) {
+      throw new BadRequestException(
+        'Solo puedes traspasar la administracion a un integrante ya vinculado al bot.',
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: admin.id },
+        data: { role: UserRole.USER },
+      }),
+      this.prisma.user.update({
+        where: { id: target.id },
+        data: { role: UserRole.FAMILY_ADMIN },
+      }),
+    ]);
+
+    return this.findById(target.id);
   }
 
   async linkTelegramAccount(input: {
@@ -264,6 +335,52 @@ export class UsersService {
         telegramChatId: input.telegramChatId,
         telegramUsername: input.telegramUsername ?? null,
         isActive: true,
+      },
+      include: {
+        family: {
+          include: {
+            settings: true,
+          },
+        },
+      },
+    });
+  }
+
+  async joinFamilyByInvite(input: {
+    familyId: string;
+    name: string;
+    phoneNumber: string;
+    telegramUserId: string;
+    telegramChatId: string;
+    telegramUsername?: string | null;
+  }) {
+    const family = await this.findFamilyById(input.familyId);
+    if (!family) {
+      throw new NotFoundException('La invitacion ya no esta disponible.');
+    }
+
+    const existing = await this.findByPhoneNumberForLink(input.phoneNumber);
+    if (existing && existing.familyId !== family.id) {
+      throw new BadRequestException(
+        'Ese telefono ya pertenece a otra familia.',
+      );
+    }
+
+    if (existing) {
+      return this.linkExistingTelegramAccount(existing.id, input);
+    }
+
+    const phoneNumber = normalizePhoneNumber(input.phoneNumber);
+    return this.prisma.user.create({
+      data: {
+        familyId: family.id,
+        name: input.name,
+        phoneNumber,
+        telegramUserId: input.telegramUserId,
+        telegramChatId: input.telegramChatId,
+        telegramUsername: input.telegramUsername ?? null,
+        role: UserRole.USER,
+        timezone: family.settings?.timezone ?? this.defaultTimezone,
       },
       include: {
         family: {
