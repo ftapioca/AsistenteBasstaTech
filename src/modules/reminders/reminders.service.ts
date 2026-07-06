@@ -69,8 +69,9 @@ export class RemindersService {
         reminderMinutesBefore,
       );
 
-      await this.telegramService.sendText(
+      await this.telegramService.sendTaskReminder(
         task.assignedToUser.telegramChatId,
+        task.id,
         message,
       );
       await this.tasksService.markReminderSent(task.id);

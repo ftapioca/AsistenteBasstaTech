@@ -195,12 +195,28 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async sendText(chatId: string, text: string) {
+  async sendText(chatId: string, text: string, extra?: unknown) {
     if (!this.bot) {
       return;
     }
 
-    await this.bot.telegram.sendMessage(chatId, text);
+    await this.bot.telegram.sendMessage(
+      chatId,
+      text,
+      extra as Parameters<typeof this.bot.telegram.sendMessage>[2],
+    );
+  }
+
+  async sendTaskReminder(chatId: string, taskId: string, text: string) {
+    await this.sendText(
+      chatId,
+      text,
+      this.withHtml(
+        Markup.inlineKeyboard([
+          [Markup.button.callback('🔎 Ver detalle', `view:detail:${taskId}`)],
+        ]),
+      ),
+    );
   }
 
   async handleWebhookUpdate(update: Update, secretToken?: string) {
@@ -946,6 +962,27 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     allowBulkDelete: boolean,
   ): BotResponse {
     const text = this.formatTaskList(listType, tasks);
+    const keyboard = this.buildTaskListKeyboard(
+      tasks,
+      allowBulkComplete,
+      allowBulkDelete,
+    );
+
+    if (!keyboard) {
+      return text;
+    }
+
+    return {
+      text,
+      extra: this.withHtml(keyboard),
+    };
+  }
+
+  private buildTaskListKeyboard(
+    tasks: DisplayTask[],
+    allowBulkComplete: boolean,
+    allowBulkDelete: boolean,
+  ) {
     const buttons = [];
 
     if (tasks.length > 0) {
@@ -971,12 +1008,30 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (buttons.length === 0) {
-      return text;
+      return null;
     }
 
+    return Markup.inlineKeyboard([buttons]);
+  }
+
+  private async buildTaskCreatedResponse(
+    chatId: string,
+    userId: string,
+    task: DisplayTask,
+  ): Promise<BotResponse> {
+    const user = await this.usersService.requireActiveUser(userId);
+    const timezone = this.usersService.resolveTimezone(user);
+    const todayTasks = await this.tasksService.listTodayTasks(userId);
+    await this.tasksService.storeTaskListContext(chatId, todayTasks);
+    const keyboard = this.buildTaskListKeyboard(todayTasks, true, true);
+
     return {
-      text,
-      extra: this.withHtml(Markup.inlineKeyboard([buttons])),
+      text: [
+        `${this.bold('Listo.')} Agregue ${this.formatTaskCreatedSummary(task, timezone)}`,
+        '',
+        this.formatTaskList('today', todayTasks, timezone),
+      ].join('\n'),
+      extra: this.withHtml(keyboard ?? undefined),
     };
   }
 
@@ -1195,11 +1250,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       pendingAction.dto,
     );
 
-    if (pendingAction.reason === 'AMBIGUOUS_DATE') {
-      return `Listo. Agregue "${task.title}" sin fecha. Puedes verla en Pendientes.`;
-    }
-
-    return `Listo. Cree otra tarea igual: "${task.title}".`;
+    return this.buildTaskCreatedResponse(
+      String(ctx.chat.id),
+      confirmedUserId,
+      task,
+    );
   }
 
   private async tryHandleCreateFamilySetup(ctx: BotTextContext) {
@@ -2033,6 +2088,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data === CALLBACK_VIEW_START || data === 'view:back:list') {
       return this.startViewTaskSelection(ctx, user.id);
+    }
+
+    if (data.startsWith('view:detail:')) {
+      const taskId = data.replace('view:detail:', '');
+      const task = await this.tasksService.getVisibleTaskById(user.id, taskId);
+
+      return {
+        answerText: 'Detalle',
+        editText: this.formatTaskDetail(
+          task,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+      };
     }
 
     if (data.startsWith('view:select:')) {
@@ -3144,11 +3214,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const task = await this.tasksService.createTaskForUser(userId, dto);
-    const user = await this.usersService.requireActiveUser(userId);
-    return `Listo. Agregue ${this.formatTaskCreatedSummary(
-      task,
-      this.usersService.resolveTimezone(user),
-    )}`;
+    return this.buildTaskCreatedResponse(String(ctx.chat.id), userId, task);
   }
 
   private async resolveWizardDueDate(text: string, userId: string) {
@@ -3329,6 +3395,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       task.scope === TaskScope.FAMILY
         ? 'como tarea familiar 👪'
         : 'como tarea personal 👤';
+    const title = this.escapeHtml(task.title);
     const due = task.dueDate
       ? this.formatDueLabel(task.dueDate, timezone)
       : 'sin fecha';
@@ -3338,7 +3405,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         : task.priority === Priority.MEDIUM
           ? ' con prioridad media ❕'
           : '';
-    return `"${task.title}" ${scope}, ${due}${priority}.`;
+    return `"${title}" ${scope}, ${due}${priority}.`;
   }
 
   private resolveQuickDueDateOption(
