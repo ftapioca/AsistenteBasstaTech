@@ -585,9 +585,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleVoiceMessage(ctx: BotVoiceContext): Promise<BotResponse> {
     try {
-      this.logger.log(
-        `Procesando nota de voz de ${ctx.from.id}. duration=${ctx.message.voice.duration}s size=${ctx.message.voice.file_size ?? 'unknown'} mime=${ctx.message.voice.mime_type ?? 'unknown'}`,
-      );
       const audio = await this.downloadTelegramFile(ctx.message.voice.file_id);
       const transcription = await this.aiService.transcribeVoiceNote({
         audio,
@@ -595,9 +592,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         mimeType: ctx.message.voice.mime_type ?? 'audio/ogg',
         language: 'es',
       });
-      this.logger.log(
-        `Transcripcion lista para ${ctx.from.id}: ${transcription.text}`,
-      );
       const textContext: BotTextContext = {
         from: ctx.from,
         chat: ctx.chat,
@@ -606,7 +600,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           text: transcription.text,
         },
       };
-      this.logger.log(`Derivando nota de voz a flujo NLP para ${ctx.from.id}`);
       const reply = await this.handleNaturalLanguage(textContext);
 
       if (!transcription.lowConfidence) {
@@ -1008,7 +1001,6 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const fileUrl = await this.bot.telegram.getFileLink(fileId);
-    this.logger.log(`Descargando archivo de voz desde Telegram: ${fileUrl}`);
     const response = await fetch(fileUrl);
 
     if (!response.ok) {
@@ -1018,11 +1010,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    this.logger.log(
-      `Archivo de voz descargado correctamente. bytes=${buffer.byteLength}`,
-    );
-    return buffer;
+    return Buffer.from(arrayBuffer);
   }
 
   private async requireRegisteredUser(ctx: BotReplyContext) {
