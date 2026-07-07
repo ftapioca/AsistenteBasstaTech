@@ -2023,11 +2023,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (data.startsWith('edit:field:assignee:')) {
       const taskId = data.replace('edit:field:assignee:', '');
       const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      const members = await this.usersService.listFamilyUsers(user.id);
       return {
         answerText: 'Editar asignacion',
         editText: await this.formatTaskAssigneeMenu(user.id, task),
         editExtra: this.withHtml(
-          await this.buildTaskAssigneeKeyboard(user.id, task.id, task.assignedToUserId ?? null),
+          this.buildTaskAssigneeKeyboard(
+            task.id,
+            task.assignedToUserId ?? null,
+            members,
+          ),
         ),
       };
     }
@@ -2162,10 +2167,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (data.startsWith('edit:assignee:set:')) {
       const [, , , taskId, value] = data.split(':');
+      const members = await this.usersService.listFamilyUsers(user.id);
+      const assignedToUserId =
+        value === 'unassigned'
+          ? null
+          : members[Number(value)]?.id ?? null;
+
+      if (value !== 'unassigned' && assignedToUserId == null) {
+        throw new BadRequestException(
+          'La persona seleccionada ya no esta disponible en tu familia.',
+        );
+      }
+
       const task = await this.tasksService.updateTaskAssignee(
         user.id,
         taskId,
-        value === 'unassigned' ? null : value,
+        assignedToUserId,
       );
       return {
         answerText: 'Asignacion actualizada',
@@ -3789,16 +3806,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ].join('\n');
   }
 
-  private async buildTaskAssigneeKeyboard(
-    userId: string,
+  private buildTaskAssigneeKeyboard(
     taskId: string,
     assignedToUserId: string | null,
+    members: Array<{ id: string; name: string }>,
   ) {
-    const members = await this.usersService.listFamilyUsers(userId);
     const rows = members.map((member) => [
       Markup.button.callback(
         `${assignedToUserId === member.id ? '✅ ' : ''}${member.name}`,
-        `edit:assignee:set:${taskId}:${member.id}`,
+        `edit:assignee:set:${taskId}:${members.findIndex((candidate) => candidate.id === member.id)}`,
       ),
     ]);
 
