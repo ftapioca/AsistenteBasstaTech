@@ -199,6 +199,10 @@ Comportamiento actual:
 - Las tareas `FAMILY` asignadas solo pueden ser editadas o completadas por administradores familiares, por quien las creo o por la persona asignada.
 - Las tareas `FAMILY` solo pueden ser eliminadas por administradores familiares.
 
+Referencia operativa:
+
+- ver [docs/task-assignment-matrix.md](/Users/ftapioca/Projects/Asistente%20Bot%20Telegram/docs/task-assignment-matrix.md)
+
 ### Backlog priorizado
 
 Prioridad actual de trabajo:

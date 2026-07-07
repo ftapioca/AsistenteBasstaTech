@@ -11,6 +11,8 @@ Este archivo resume los cambios relevantes del proyecto a partir del historial d
   - tareas familiares asignadas editables/completables por admin, asignador o asignado
   - eliminacion de tareas familiares restringida a admins
 - Se documenta el comportamiento en `README.md` y se deja trazabilidad funcional de la feature.
+- Se agrega una matriz operativa en `docs/task-assignment-matrix.md` para aterrizar permisos por accion y pantalla.
+- Se agregan tests unitarios en `TasksService` para bloquear regresiones de visibilidad, edicion, borrado y reasignacion de ownership al convertir tareas a personales.
 
 ## 2026-07-07
 
