@@ -599,7 +599,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         `Transcripcion lista para ${ctx.from.id}: ${transcription.text}`,
       );
       const textContext: BotTextContext = {
-        ...ctx,
+        from: ctx.from,
+        chat: ctx.chat,
+        reply: ctx.reply.bind(ctx),
         message: {
           text: transcription.text,
         },
