@@ -2169,11 +2169,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const [, , , taskId, value] = data.split(':');
       const members = await this.usersService.listFamilyUsers(user.id);
       const assignedToUserId =
-        value === 'unassigned'
+        value === 'u'
           ? null
           : members[Number(value)]?.id ?? null;
 
-      if (value !== 'unassigned' && assignedToUserId == null) {
+      if (value !== 'u' && assignedToUserId == null) {
         throw new BadRequestException(
           'La persona seleccionada ya no esta disponible en tu familia.',
         );
@@ -3821,7 +3821,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     rows.push([
       Markup.button.callback(
         `${assignedToUserId == null ? '✅ ' : ''}${WIZARD_ASSIGNEE_NONE}`,
-        `edit:assignee:set:${taskId}:unassigned`,
+        `edit:assignee:set:${taskId}:u`,
       ),
     ]);
     rows.push([
