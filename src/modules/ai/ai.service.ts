@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Priority, TaskScope } from '@prisma/client';
 import { DateTime } from 'luxon';
-import OpenAI, { toFile } from 'openai';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import { AiInterpretation, AiTranscription } from './ai.types';
 
@@ -53,40 +53,18 @@ export class AiService {
     mimeType?: string;
     language?: string;
   }): Promise<AiTranscription> {
-    if (!this.client) {
+    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
+    if (!apiKey) {
       throw new Error('OPENAI_API_KEY no configurado para transcripcion.');
     }
 
-    const file = await toFile(
-      input.audio,
-      input.fileName ?? 'voice-note.ogg',
-      {
-        type: input.mimeType ?? 'audio/ogg',
-      },
-    );
     const preferredModel = this.configService.get<string>(
       'OPENAI_TRANSCRIPTION_MODEL',
       'gpt-4o-transcribe',
     );
 
     try {
-      const transcription = await this.client.audio.transcriptions.create({
-        file,
-        model: preferredModel,
-        language: input.language ?? 'es',
-        response_format: 'json',
-        temperature: 0,
-      });
-      const text = transcription.text.trim();
-
-      if (!text) {
-        throw new Error('La transcripcion llego vacia.');
-      }
-
-      return {
-        text,
-        lowConfidence: false,
-      };
+      return await this.requestTranscription(input, preferredModel, apiKey);
     } catch (error) {
       const details = this.formatOpenAiError(error);
       this.logger.warn(
@@ -94,32 +72,13 @@ export class AiService {
       );
     }
 
-    let fallbackTranscription;
-
     try {
-      fallbackTranscription = await this.client.audio.transcriptions.create({
-        file,
-        model: 'whisper-1',
-        language: input.language ?? 'es',
-        response_format: 'json',
-        temperature: 0,
-      });
+      return await this.requestTranscription(input, 'whisper-1', apiKey);
     } catch (error) {
       throw new Error(
         `Fallo transcripcion fallback whisper-1: ${this.formatOpenAiError(error)}`,
       );
     }
-
-    const fallbackText = fallbackTranscription.text.trim();
-
-    if (!fallbackText) {
-      throw new Error('La transcripcion llego vacia.');
-    }
-
-    return {
-      text: fallbackText,
-      lowConfidence: false,
-    };
   }
 
   async interpretMessage(
@@ -351,5 +310,68 @@ export class AiService {
     }
 
     return String(error);
+  }
+
+  private async requestTranscription(
+    input: {
+      audio: Buffer;
+      fileName?: string;
+      mimeType?: string;
+      language?: string;
+    },
+    model: string,
+    apiKey: string,
+  ): Promise<AiTranscription> {
+    const form = new FormData();
+    const bytes = new Uint8Array(input.audio);
+    const blob = new Blob([bytes], {
+      type: input.mimeType ?? 'audio/ogg',
+    });
+
+    form.append('file', blob, input.fileName ?? 'voice-note.ogg');
+    form.append('model', model);
+    form.append('response_format', 'json');
+    form.append('temperature', '0');
+
+    if (input.language?.trim()) {
+      form.append('language', input.language.trim());
+    }
+
+    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: form,
+    });
+
+    const bodyText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        JSON.stringify(
+          {
+            status: response.status,
+            body: bodyText,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+
+    const payload = JSON.parse(bodyText) as { text?: string };
+    const text = payload.text?.trim();
+
+    if (!text) {
+      throw new Error(
+        `La transcripcion llego vacia. body=${bodyText.slice(0, 500)}`,
+      );
+    }
+
+    return {
+      text,
+      lowConfidence: false,
+    };
   }
 }
