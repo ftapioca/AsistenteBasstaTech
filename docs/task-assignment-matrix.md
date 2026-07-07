@@ -72,6 +72,8 @@ Este documento aterriza la politica funcional en acciones concretas del bot para
 - En tareas `FAMILY` sin asignar, el recordatorio se envia a todos los integrantes activos con Telegram vinculado.
 - En tareas `FAMILY` asignadas, el recordatorio se envia al creador/asignador y a la persona asignada.
 - Si el creador y el asignado son la misma persona, el recordatorio se envia una sola vez.
+- Cada entrega se persiste por `task + user + dueDateSnapshot`, por lo que un cambio posterior de preferencia no vuelve a disparar el mismo recordatorio ya enviado.
+- Si el envio falla, el sistema deja la entrega como pendiente y reintenta en ticks posteriores dentro de `REMINDER_OVERDUE_GRACE_MINUTES`.
 
 ## Pendientes de la siguiente iteracion
 

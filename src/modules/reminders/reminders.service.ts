@@ -37,59 +37,126 @@ export class RemindersService {
     let sentCount = 0;
 
     for (const task of tasks) {
-      const reminderMinutesBefore =
-        this.tasksService.resolveReminderMinutesBeforeForTask(
-          task,
-          globalReminderMinutesBefore,
-        );
-      if (reminderMinutesBefore === 0 || !task.dueDate) {
+      if (!task.dueDate) {
         continue;
       }
 
-      const dueDate = task.dueDate ? DateTime.fromJSDate(task.dueDate) : null;
-      const diffMinutes = dueDate
-        ? Math.round(dueDate.diff(now, 'minutes').minutes)
-        : null;
-      if (
-        diffMinutes == null ||
-        diffMinutes > reminderMinutesBefore ||
-        diffMinutes < -overdueGraceMinutes
-      ) {
-        continue;
-      }
-
-      const message = buildReminderMessage(
-        task.title,
-        dueDate,
-        now,
-        reminderMinutesBefore,
-      );
       const recipients = this.tasksService.getReminderRecipientsForTask(task);
-
       if (recipients.length === 0) {
         continue;
       }
 
-      let sentForTask = 0;
+      const dueDate = DateTime.fromJSDate(task.dueDate);
 
       for (const recipient of recipients) {
-        await this.telegramService.sendTaskReminder(
-          recipient.telegramChatId as string,
-          task.id,
-          message,
-        );
-        sentForTask += 1;
-      }
+        const reminderMinutesBefore =
+          this.tasksService.resolveReminderMinutesBeforeForRecipient(
+            task,
+            recipient,
+            globalReminderMinutesBefore,
+          );
+        if (reminderMinutesBefore === 0) {
+          continue;
+        }
 
-      if (sentForTask > 0) {
-        await this.tasksService.markReminderSent(task.id);
-        sentCount += sentForTask;
+        const diffMinutes = Math.round(dueDate.diff(now, 'minutes').minutes);
+        if (
+          diffMinutes > reminderMinutesBefore ||
+          diffMinutes < -overdueGraceMinutes
+        ) {
+          continue;
+        }
+
+        const delivery = await this.tasksService.getReminderDelivery({
+          taskId: task.id,
+          userId: recipient.id,
+          dueDateSnapshot: task.dueDate,
+        });
+        if (delivery?.sentAt) {
+          continue;
+        }
+
+        const scheduledFor = dueDate
+          .minus({ minutes: reminderMinutesBefore })
+          .toJSDate();
+        const message = buildReminderMessage(
+          task.title,
+          dueDate,
+          now,
+          reminderMinutesBefore,
+        );
+
+        try {
+          await this.sendReminderWithRetry(
+            recipient.telegramChatId as string,
+            task.id,
+            message,
+          );
+          await this.tasksService.markReminderDelivered({
+            taskId: task.id,
+            userId: recipient.id,
+            dueDateSnapshot: task.dueDate,
+            effectiveReminderMinutesBefore: reminderMinutesBefore,
+            scheduledFor,
+          });
+          sentCount += 1;
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : 'Error desconocido';
+          await this.tasksService.markReminderDeliveryFailed({
+            taskId: task.id,
+            userId: recipient.id,
+            dueDateSnapshot: task.dueDate,
+            effectiveReminderMinutesBefore: reminderMinutesBefore,
+            scheduledFor,
+            errorMessage,
+          });
+          this.logger.warn(
+            `No se pudo enviar recordatorio de ${task.id} a ${recipient.id}: ${errorMessage}`,
+          );
+        }
       }
     }
 
     if (sentCount > 0) {
       this.logger.log(`Recordatorios enviados: ${sentCount}`);
     }
+  }
+
+  private async sendReminderWithRetry(
+    chatId: string,
+    taskId: string,
+    message: string,
+  ) {
+    try {
+      await this.telegramService.sendTaskReminder(chatId, taskId, message);
+      return;
+    } catch (error) {
+      if (!this.isTransientReminderError(error)) {
+        throw error;
+      }
+    }
+
+    await this.telegramService.sendTaskReminder(chatId, taskId, message);
+  }
+
+  private isTransientReminderError(error: unknown) {
+    const message = error instanceof Error ? error.message.toLowerCase() : '';
+
+    return [
+      '429',
+      '500',
+      '502',
+      '503',
+      '504',
+      'timeout',
+      'timed out',
+      'network',
+      'econnreset',
+      'etimedout',
+      'socket hang up',
+      'temporarily unavailable',
+    ].some((fragment) => message.includes(fragment));
   }
 }
 

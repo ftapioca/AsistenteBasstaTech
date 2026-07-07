@@ -6,9 +6,11 @@ describe('RemindersService', () => {
     const tasksService = {
       getMaxReminderMinutesBefore: jest.fn().mockResolvedValue(30),
       getTasksDueForReminder: jest.fn(),
-      resolveReminderMinutesBeforeForTask: jest.fn().mockReturnValue(30),
+      resolveReminderMinutesBeforeForRecipient: jest.fn().mockReturnValue(30),
       getReminderRecipientsForTask: jest.fn(),
-      markReminderSent: jest.fn().mockResolvedValue(undefined),
+      getReminderDelivery: jest.fn().mockResolvedValue(null),
+      markReminderDelivered: jest.fn().mockResolvedValue(undefined),
+      markReminderDeliveryFailed: jest.fn().mockResolvedValue(undefined),
     };
     const telegramService = {
       sendTaskReminder: jest.fn().mockResolvedValue(undefined),
@@ -43,6 +45,7 @@ describe('RemindersService', () => {
     const task = {
       id: 'task-1',
       title: 'Comprar pan',
+      reminderSent: false,
       dueDate: DateTime.now().toJSDate(),
     };
 
@@ -74,7 +77,7 @@ describe('RemindersService', () => {
       task.id,
       expect.any(String),
     );
-    expect(tasksService.markReminderSent).toHaveBeenCalledWith(task.id);
+    expect(tasksService.markReminderDelivered).toHaveBeenCalledTimes(3);
   });
 
   it('envia recordatorios de tarea familiar asignada al asignador y al asignado', async () => {
@@ -82,6 +85,7 @@ describe('RemindersService', () => {
     const task = {
       id: 'task-2',
       title: 'Revisar alertas',
+      reminderSent: false,
       dueDate: DateTime.now().toJSDate(),
     };
 
@@ -104,6 +108,99 @@ describe('RemindersService', () => {
       task.id,
       expect.any(String),
     );
-    expect(tasksService.markReminderSent).toHaveBeenCalledWith(task.id);
+    expect(tasksService.markReminderDelivered).toHaveBeenCalledTimes(2);
+  });
+
+  it('no reenvia si ya existe un delivery con sentAt para task + user + dueDate', async () => {
+    const { service, tasksService, telegramService } = createService();
+    const dueDate = DateTime.now().toJSDate();
+    const task = {
+      id: 'task-3',
+      title: 'Pagar cuentas',
+      reminderSent: false,
+      dueDate,
+    };
+
+    tasksService.getTasksDueForReminder.mockResolvedValue([task]);
+    tasksService.getReminderRecipientsForTask.mockReturnValue([
+      { id: 'u1', telegramChatId: 'chat-1', isActive: true },
+    ]);
+    tasksService.getReminderDelivery.mockResolvedValue({
+      sentAt: new Date(),
+    });
+
+    await service.processReminders();
+
+    expect(telegramService.sendTaskReminder).not.toHaveBeenCalled();
+    expect(tasksService.markReminderDelivered).not.toHaveBeenCalled();
+  });
+
+  it('rescata recordatorios dentro de la ventana de gracia', async () => {
+    const { service, tasksService, telegramService } = createService();
+    const task = {
+      id: 'task-4',
+      title: 'Sacar basura',
+      reminderSent: false,
+      dueDate: DateTime.now().minus({ minutes: 5 }).toJSDate(),
+    };
+
+    tasksService.getTasksDueForReminder.mockResolvedValue([task]);
+    tasksService.getReminderRecipientsForTask.mockReturnValue([
+      { id: 'u1', telegramChatId: 'chat-1', isActive: true },
+    ]);
+    tasksService.resolveReminderMinutesBeforeForRecipient.mockReturnValue(10);
+
+    await service.processReminders();
+
+    expect(telegramService.sendTaskReminder).toHaveBeenCalledTimes(1);
+    expect(tasksService.markReminderDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it('hace retry inmediato una vez ante un fallo transitorio', async () => {
+    const { service, tasksService, telegramService } = createService();
+    const task = {
+      id: 'task-5',
+      title: 'Revisar panel',
+      reminderSent: false,
+      dueDate: DateTime.now().toJSDate(),
+    };
+
+    tasksService.getTasksDueForReminder.mockResolvedValue([task]);
+    tasksService.getReminderRecipientsForTask.mockReturnValue([
+      { id: 'u1', telegramChatId: 'chat-1', isActive: true },
+    ]);
+    telegramService.sendTaskReminder
+      .mockRejectedValueOnce(new Error('Telegram 503 temporarily unavailable'))
+      .mockResolvedValueOnce(undefined);
+
+    await service.processReminders();
+
+    expect(telegramService.sendTaskReminder).toHaveBeenCalledTimes(2);
+    expect(tasksService.markReminderDelivered).toHaveBeenCalledTimes(1);
+    expect(tasksService.markReminderDeliveryFailed).not.toHaveBeenCalled();
+  });
+
+  it('registra una falla y deja el delivery listo para retry posterior cuando el error persiste', async () => {
+    const { service, tasksService, telegramService } = createService();
+    const task = {
+      id: 'task-6',
+      title: 'Revisar panel',
+      reminderSent: false,
+      dueDate: DateTime.now().toJSDate(),
+    };
+
+    tasksService.getTasksDueForReminder.mockResolvedValue([task]);
+    tasksService.getReminderRecipientsForTask.mockReturnValue([
+      { id: 'u1', telegramChatId: 'chat-1', isActive: true },
+    ]);
+    telegramService.sendTaskReminder.mockRejectedValue(
+      new Error('Telegram 503 temporarily unavailable'),
+    );
+
+    await service.processReminders();
+
+    expect(telegramService.sendTaskReminder).toHaveBeenCalledTimes(2);
+    expect(tasksService.markReminderDelivered).not.toHaveBeenCalled();
+    expect(tasksService.markReminderDeliveryFailed).toHaveBeenCalledTimes(1);
   });
 });

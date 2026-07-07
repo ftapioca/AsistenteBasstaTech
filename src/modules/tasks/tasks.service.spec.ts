@@ -16,6 +16,10 @@ type MockPrisma = {
     delete: jest.Mock;
     deleteMany: jest.Mock;
   };
+  taskReminderDelivery: {
+    findUnique: jest.Mock;
+    upsert: jest.Mock;
+  };
 };
 
 function buildUser(overrides: Partial<User> = {}): User {
@@ -67,6 +71,10 @@ function createService() {
       update: jest.fn(),
       delete: jest.fn(),
       deleteMany: jest.fn(),
+    },
+    taskReminderDelivery: {
+      findUnique: jest.fn(),
+      upsert: jest.fn(),
     },
   };
   const usersService = {
@@ -230,5 +238,91 @@ describe('TasksService permissions', () => {
         }),
       }),
     );
+  });
+
+  it('usa la preferencia del destinatario para calcular recordatorios por usuario', () => {
+    const { service } = createService();
+    const task = {
+      ...buildTask({
+        scope: TaskScope.FAMILY,
+        reminderMinutesBefore: null,
+      }),
+      createdByUser: {
+        id: 'user-1',
+        telegramChatId: 'chat-1',
+        isActive: true,
+        reminderMinutesBefore: null,
+      },
+      assignedToUser: {
+        id: 'user-2',
+        telegramChatId: 'chat-2',
+        isActive: true,
+        reminderMinutesBefore: 10,
+      },
+      family: {
+        settings: {
+          id: 'settings-1',
+          familyId: 'family-1',
+          reminderMinutesBefore: 30,
+          timezone: 'America/Santiago',
+          dailyBriefingTime: '08:30',
+        },
+        users: [],
+      },
+    };
+
+    expect(
+      service.resolveReminderMinutesBeforeForRecipient(
+        task,
+        task.assignedToUser,
+        45,
+      ),
+    ).toBe(10);
+  });
+
+  it('devuelve a toda la familia para tareas familiares sin asignar y evita duplicados', () => {
+    const { service } = createService();
+    const familyUser = {
+      id: 'user-2',
+      telegramChatId: 'chat-2',
+      isActive: true,
+      reminderMinutesBefore: null,
+    };
+    const task = {
+      ...buildTask({
+        scope: TaskScope.FAMILY,
+        assignedToUserId: null,
+      }),
+      createdByUser: {
+        id: 'user-1',
+        telegramChatId: 'chat-1',
+        isActive: true,
+        reminderMinutesBefore: null,
+      },
+      assignedToUser: null,
+      family: {
+        settings: null,
+        users: [
+          {
+            id: 'user-1',
+            telegramChatId: 'chat-1',
+            isActive: true,
+            reminderMinutesBefore: null,
+          },
+          familyUser,
+          familyUser,
+        ],
+      },
+    };
+
+    expect(service.getReminderRecipientsForTask(task)).toEqual([
+      {
+        id: 'user-1',
+        telegramChatId: 'chat-1',
+        isActive: true,
+        reminderMinutesBefore: null,
+      },
+      familyUser,
+    ]);
   });
 });

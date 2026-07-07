@@ -6,6 +6,7 @@ import {
 import {
   Prisma,
   Priority,
+  PrismaClient,
   Settings,
   Task,
   TaskScope,
@@ -47,6 +48,17 @@ type TaskWithReminderContext = Task & {
     settings: Settings | null;
     users: ReminderTargetUser[];
   };
+};
+type ReminderDeliveryKey = {
+  taskId: string;
+  userId: string;
+  dueDateSnapshot: Date;
+  channel?: 'TELEGRAM';
+};
+type ReminderDeliveryWrite = ReminderDeliveryKey & {
+  effectiveReminderMinutesBefore: number;
+  scheduledFor: Date;
+  errorMessage?: string | null;
 };
 type DailyBriefingTask = Pick<
   Task,
@@ -147,6 +159,10 @@ export class TasksService {
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
   ) {}
+
+  private get reminderDeliveryDelegate() {
+    return (this.prisma as PrismaClient).taskReminderDelivery;
+  }
 
   async createTaskForUser(userId: string, dto: CreateTaskDto) {
     const user = await this.usersService.requireActiveUser(userId);
@@ -662,7 +678,6 @@ export class TasksService {
     return this.prisma.task.findMany({
       where: {
         status: TaskStatus.PENDING,
-        reminderSent: false,
         dueDate: {
           gte: lowerBound,
           lte: limit,
@@ -733,23 +748,17 @@ export class TasksService {
     );
   }
 
-  resolveReminderMinutesBeforeForTask(
+  resolveReminderMinutesBeforeForRecipient(
     task: TaskWithReminderContext,
+    recipient: ReminderTargetUser,
     globalReminderMinutesBefore: number,
   ) {
     if (task.reminderMinutesBefore != null) {
       return task.reminderMinutesBefore;
     }
 
-    if (task.assignedToUser?.reminderMinutesBefore != null) {
-      return task.assignedToUser.reminderMinutesBefore;
-    }
-
-    if (
-      task.scope === TaskScope.PERSONAL &&
-      task.createdByUser.reminderMinutesBefore != null
-    ) {
-      return task.createdByUser.reminderMinutesBefore;
+    if (recipient.reminderMinutesBefore != null) {
+      return recipient.reminderMinutesBefore;
     }
 
     if (task.family.settings?.reminderMinutesBefore != null) {
@@ -783,11 +792,111 @@ export class TasksService {
     });
   }
 
-  async markReminderSent(taskId: string) {
-    return this.prisma.task.update({
-      where: { id: taskId },
-      data: {
-        reminderSent: true,
+  async getReminderDelivery({
+    taskId,
+    userId,
+    dueDateSnapshot,
+    channel = 'TELEGRAM',
+  }: ReminderDeliveryKey) {
+    return this.reminderDeliveryDelegate.findUnique({
+      where: {
+        taskId_userId_dueDateSnapshot_channel: {
+          taskId,
+          userId,
+          dueDateSnapshot,
+          channel,
+        },
+      },
+    });
+  }
+
+  async markReminderDelivered({
+    taskId,
+    userId,
+    dueDateSnapshot,
+    effectiveReminderMinutesBefore,
+    scheduledFor,
+    channel = 'TELEGRAM',
+  }: ReminderDeliveryWrite) {
+    const now = new Date();
+
+    return this.reminderDeliveryDelegate.upsert({
+      where: {
+        taskId_userId_dueDateSnapshot_channel: {
+          taskId,
+          userId,
+          dueDateSnapshot,
+          channel,
+        },
+      },
+      create: {
+        taskId,
+        userId,
+        dueDateSnapshot,
+        channel,
+        effectiveReminderMinutesBefore,
+        scheduledFor,
+        attemptCount: 1,
+        lastAttemptAt: now,
+        sentAt: now,
+        failedAt: null,
+        errorMessage: null,
+      },
+      update: {
+        effectiveReminderMinutesBefore,
+        scheduledFor,
+        attemptCount: {
+          increment: 1,
+        },
+        lastAttemptAt: now,
+        sentAt: now,
+        failedAt: null,
+        errorMessage: null,
+      },
+    });
+  }
+
+  async markReminderDeliveryFailed({
+    taskId,
+    userId,
+    dueDateSnapshot,
+    effectiveReminderMinutesBefore,
+    scheduledFor,
+    errorMessage,
+    channel = 'TELEGRAM',
+  }: ReminderDeliveryWrite) {
+    const now = new Date();
+
+    return this.reminderDeliveryDelegate.upsert({
+      where: {
+        taskId_userId_dueDateSnapshot_channel: {
+          taskId,
+          userId,
+          dueDateSnapshot,
+          channel,
+        },
+      },
+      create: {
+        taskId,
+        userId,
+        dueDateSnapshot,
+        channel,
+        effectiveReminderMinutesBefore,
+        scheduledFor,
+        attemptCount: 1,
+        lastAttemptAt: now,
+        failedAt: now,
+        errorMessage: errorMessage ?? null,
+      },
+      update: {
+        effectiveReminderMinutesBefore,
+        scheduledFor,
+        attemptCount: {
+          increment: 1,
+        },
+        lastAttemptAt: now,
+        failedAt: now,
+        errorMessage: errorMessage ?? null,
       },
     });
   }

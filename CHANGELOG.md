@@ -16,6 +16,11 @@ Este archivo resume los cambios relevantes del proyecto a partir del historial d
 - Se ajustan los recordatorios familiares:
   - tareas familiares sin asignar notifican a todos los miembros activos con Telegram vinculado
   - tareas familiares asignadas notifican al creador y al asignado
+- Se agrega persistencia por entrega en `TaskReminderDelivery`:
+  - una sola notificacion por `task + user + dueDate`
+  - retry simple para fallos transitorios
+  - rescate dentro de `REMINDER_OVERDUE_GRACE_MINUTES`
+  - sin reenvio si el envio ya fue exitoso y luego cambian preferencias
 
 ## 2026-07-07
 
