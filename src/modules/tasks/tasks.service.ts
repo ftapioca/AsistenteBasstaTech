@@ -19,6 +19,23 @@ import { UsersService } from '../users/users.service';
 import { CreateTaskDto } from './dto/create-task.dto';
 
 type ActiveUser = NonNullable<Awaited<ReturnType<UsersService['findById']>>>;
+const taskActorInclude = {
+  assignedToUser: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+  createdByUser: {
+    select: {
+      id: true,
+      name: true,
+    },
+  },
+} satisfies Prisma.TaskInclude;
+type TaskWithActors = Prisma.TaskGetPayload<{
+  include: typeof taskActorInclude;
+}>;
 type TaskWithReminderContext = Task & {
   assignedToUser:
     | (User & {
@@ -69,6 +86,7 @@ type PendingAction =
       step:
         | 'TITLE'
         | 'SCOPE'
+        | 'ASSIGNEE'
         | 'DUE_DATE'
         | 'NOTE_DECISION'
         | 'NOTE_INPUT'
@@ -77,6 +95,8 @@ type PendingAction =
       draft: {
         title?: string;
         scope?: TaskScope;
+        assignedToUserId?: string | null;
+        assignedToUserName?: string | null;
         dueDate?: string | null;
         dueDateInput?: string | null;
         description?: string | null;
@@ -127,12 +147,13 @@ export class TasksService {
 
   async createTaskForUser(userId: string, dto: CreateTaskDto) {
     const user = await this.usersService.requireActiveUser(userId);
+    const assignedToUserId = await this.resolveAssignedUserId(user, dto);
 
     return this.prisma.task.create({
       data: {
         familyId: user.familyId,
         createdByUserId: user.id,
-        assignedToUserId: user.id,
+        assignedToUserId,
         title: dto.title,
         description: dto.description ?? null,
         priority: dto.priority ?? Priority.MEDIUM,
@@ -140,6 +161,7 @@ export class TasksService {
         dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
         reminderMinutesBefore: dto.reminderMinutesBefore ?? null,
       },
+      include: taskActorInclude,
     });
   }
 
@@ -207,6 +229,7 @@ export class TasksService {
         },
         ...this.visibilityWhere(user),
       },
+      include: taskActorInclude,
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
   }
@@ -220,6 +243,7 @@ export class TasksService {
         status: TaskStatus.PENDING,
         ...this.visibilityWhere(user),
       },
+      include: taskActorInclude,
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
   }
@@ -233,6 +257,7 @@ export class TasksService {
         status: TaskStatus.PENDING,
         scope: TaskScope.FAMILY,
       },
+      include: taskActorInclude,
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
     });
   }
@@ -246,6 +271,7 @@ export class TasksService {
         status: TaskStatus.COMPLETED,
         ...this.visibilityWhere(user),
       },
+      include: taskActorInclude,
       orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }],
     });
   }
@@ -346,6 +372,7 @@ export class TasksService {
   async getVisibleTaskById(userId: string, taskId: string) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
+      include: taskActorInclude,
     });
 
     if (!task) {
@@ -360,6 +387,7 @@ export class TasksService {
   async getEditableTaskById(userId: string, taskId: string) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
+      include: taskActorInclude,
     });
 
     if (!task) {
@@ -393,6 +421,7 @@ export class TasksService {
         dueDate: dueDate ? new Date(dueDate) : null,
         reminderSent: false,
       },
+      include: taskActorInclude,
     });
   }
 
@@ -413,6 +442,7 @@ export class TasksService {
       data: {
         title,
       },
+      include: taskActorInclude,
     });
   }
 
@@ -438,6 +468,7 @@ export class TasksService {
         reminderMinutesBefore,
         reminderSent: false,
       },
+      include: taskActorInclude,
     });
   }
 
@@ -453,11 +484,16 @@ export class TasksService {
 
     this.assertCanEditTask(user, task);
 
+    const assignedToUserId =
+      scope === TaskScope.PERSONAL ? user.id : task.assignedToUserId;
+
     return this.prisma.task.update({
       where: { id: task.id },
       data: {
         scope,
+        assignedToUserId,
       },
+      include: taskActorInclude,
     });
   }
 
@@ -482,6 +518,54 @@ export class TasksService {
       data: {
         description,
       },
+      include: taskActorInclude,
+    });
+  }
+
+  async updateTaskAssignee(
+    userId: string,
+    taskId: string,
+    assignedToUserId: string | null,
+  ) {
+    const user = await this.usersService.requireActiveUser(userId);
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+    });
+
+    if (!task) {
+      throw new BadRequestException('La tarea ya no existe.');
+    }
+
+    this.assertCanEditTask(user, task);
+
+    if (task.scope !== TaskScope.FAMILY) {
+      throw new BadRequestException(
+        'Solo puedes asignar tareas familiares a miembros de la familia.',
+      );
+    }
+
+    let resolvedAssigneeId: string | null = null;
+
+    if (assignedToUserId) {
+      const assignee = await this.prisma.user.findUnique({
+        where: { id: assignedToUserId },
+      });
+
+      if (!assignee || !assignee.isActive || assignee.familyId !== user.familyId) {
+        throw new BadRequestException(
+          'La persona seleccionada no pertenece a tu familia.',
+        );
+      }
+
+      resolvedAssigneeId = assignee.id;
+    }
+
+    return this.prisma.task.update({
+      where: { id: task.id },
+      data: {
+        assignedToUserId: resolvedAssigneeId,
+      },
+      include: taskActorInclude,
     });
   }
 
@@ -493,11 +577,12 @@ export class TasksService {
 
     const tasks = await this.prisma.task.findMany({
       where: { id: { in: taskIds } },
+      include: taskActorInclude,
     });
     const taskById = new Map(tasks.map((task) => [task.id, task]));
     return taskIds
       .map((taskId) => taskById.get(taskId))
-      .filter((task): task is Task => Boolean(task));
+      .filter((task): task is TaskWithActors => Boolean(task));
   }
 
   async completeTasksByIds(userId: string, taskIds: string[]) {
@@ -703,7 +788,10 @@ export class TasksService {
       throw new BadRequestException('Ese indice no existe en la lista actual.');
     }
 
-    const task = await this.prisma.task.findUnique({ where: { id: taskId } });
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      include: taskActorInclude,
+    });
     if (!task) {
       throw new BadRequestException('La tarea ya no existe.');
     }
@@ -732,28 +820,31 @@ export class TasksService {
       );
     }
 
-    if (user.role === UserRole.FAMILY_ADMIN) {
-      return;
-    }
+    if (task.scope === TaskScope.PERSONAL) {
+      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
+        return;
+      }
 
-    if (
-      task.scope === TaskScope.PERSONAL &&
-      task.assignedToUserId !== user.id
-    ) {
       throw new ForbiddenException(
         'Solo puedes completar tus tareas personales.',
       );
     }
 
-    if (
-      task.scope === TaskScope.FAMILY &&
-      task.assignedToUserId &&
-      task.assignedToUserId !== user.id
-    ) {
-      throw new ForbiddenException(
-        'La tarea familiar esta asignada a otro usuario.',
-      );
+    if (!task.assignedToUserId) {
+      return;
     }
+
+    if (
+      user.role === UserRole.FAMILY_ADMIN ||
+      task.createdByUserId === user.id ||
+      task.assignedToUserId === user.id
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      'La tarea familiar esta asignada a otro usuario.',
+    );
   }
 
   private assertCanDeleteTask(user: ActiveUser, task: Task) {
@@ -763,13 +854,22 @@ export class TasksService {
       );
     }
 
-    if (user.role === UserRole.FAMILY_ADMIN) {
+    if (task.scope === TaskScope.FAMILY && user.role === UserRole.FAMILY_ADMIN) {
       return;
     }
 
-    if (task.createdByUserId !== user.id && task.assignedToUserId !== user.id) {
-      throw new ForbiddenException('Solo puedes eliminar tus propias tareas.');
+    if (
+      task.scope === TaskScope.PERSONAL &&
+      (task.createdByUserId === user.id || task.assignedToUserId === user.id)
+    ) {
+      return;
     }
+
+    throw new ForbiddenException(
+      task.scope === TaskScope.FAMILY
+        ? 'Solo un administrador familiar puede eliminar tareas familiares.'
+        : 'Solo puedes eliminar tus tareas personales.',
+    );
   }
 
   private assertCanEditTask(user: ActiveUser, task: Task) {
@@ -781,26 +881,29 @@ export class TasksService {
       throw new BadRequestException('Solo puedes editar tareas pendientes.');
     }
 
-    if (user.role === UserRole.FAMILY_ADMIN) {
-      return;
-    }
-
-    if (task.scope === TaskScope.FAMILY) {
-      if (
-        task.createdByUserId === user.id ||
-        task.assignedToUserId === user.id
-      ) {
+    if (task.scope === TaskScope.PERSONAL) {
+      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
         return;
       }
 
-      throw new ForbiddenException(
-        'Solo puedes editar tareas familiares creadas por ti o asignadas a ti.',
-      );
+      throw new ForbiddenException('Solo puedes editar tus tareas personales.');
     }
 
-    if (task.createdByUserId !== user.id && task.assignedToUserId !== user.id) {
-      throw new ForbiddenException('Solo puedes editar tus propias tareas.');
+    if (!task.assignedToUserId) {
+      return;
     }
+
+    if (
+      user.role === UserRole.FAMILY_ADMIN ||
+      task.createdByUserId === user.id ||
+      task.assignedToUserId === user.id
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(
+      'La tarea familiar esta asignada a otro usuario.',
+    );
   }
 
   private assertCanViewTask(user: ActiveUser, task: Task) {
@@ -808,12 +911,11 @@ export class TasksService {
       throw new ForbiddenException('No puedes ver tareas de otra familia.');
     }
 
-    if (user.role === UserRole.FAMILY_ADMIN) {
+    if (task.scope === TaskScope.FAMILY) {
       return;
     }
 
     if (
-      task.scope === TaskScope.PERSONAL &&
       task.createdByUserId !== user.id &&
       task.assignedToUserId !== user.id
     ) {
@@ -822,10 +924,6 @@ export class TasksService {
   }
 
   private visibilityWhere(user: User): Prisma.TaskWhereInput {
-    if (user.role === UserRole.FAMILY_ADMIN) {
-      return {};
-    }
-
     return {
       OR: [
         { scope: TaskScope.FAMILY },
@@ -833,6 +931,31 @@ export class TasksService {
         { createdByUserId: user.id },
       ],
     };
+  }
+
+  private async resolveAssignedUserId(
+    user: ActiveUser,
+    dto: CreateTaskDto,
+  ): Promise<string | null> {
+    if (dto.scope === TaskScope.PERSONAL) {
+      return user.id;
+    }
+
+    if (!dto.assignedToUserId) {
+      return null;
+    }
+
+    const assignee = await this.prisma.user.findUnique({
+      where: { id: dto.assignedToUserId },
+    });
+
+    if (!assignee || !assignee.isActive || assignee.familyId !== user.familyId) {
+      throw new BadRequestException(
+        'La persona asignada no pertenece a tu familia.',
+      );
+    }
+
+    return assignee.id;
   }
 }
 

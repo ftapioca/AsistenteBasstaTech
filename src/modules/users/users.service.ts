@@ -157,6 +157,23 @@ export class UsersService {
     });
   }
 
+  async listFamilyUsers(userId: string) {
+    const user = await this.requireActiveUser(userId);
+
+    return this.prisma.user.findMany({
+      where: {
+        familyId: user.familyId,
+        isActive: true,
+      },
+      orderBy: [{ role: 'desc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        role: true,
+      },
+    });
+  }
+
   async listTransferableAdminUsers(adminUserId: string) {
     const admin = await this.requireActiveUser(adminUserId);
     if (admin.role !== UserRole.FAMILY_ADMIN) {

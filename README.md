@@ -29,6 +29,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Alta manual de usuarios por admin con `/crearusuario Nombre +56912345678`
 - Vinculacion de usuarios precreados compartiendo su contacto
 - Tareas personales y familiares
+- Asignacion opcional de tareas familiares a miembros de la familia
 - Listados `/hoy`, `/pendientes`, `/familiares`, `/completadas`
 - Visualizacion de tareas vencidas en una seccion separada
 - Indicador visual `📝` para tareas con nota
@@ -148,12 +149,14 @@ La API HTTP queda en `http://localhost:3000`:
 - `/ver N` muestra el detalle de una tarea y su nota actual
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
 - Las notas aceptan hasta `1500` caracteres
+- Las tareas familiares pueden quedar `sin asignar` o asignadas a un integrante
 - La lista de pendientes muestra acciones contextuales para `Ver tarea`, `Completar varias` y `Eliminar varias`
 - `Ver tarea` abre una seleccion inline de tareas, muestra el detalle y desde ahi permite `Marcar como completada` o `Editar`
 - Al marcar una tarea como completada desde `Ver tarea`, el bot pide confirmacion antes de cerrar la accion
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
 - La edicion de tareas ahora usa una navegacion inline de `2 niveles`: primero eliges area (`Contenido` o `Programacion`) y luego la accion concreta
 - En `Contenido`, la edicion permite cambiar `Titulo`, `Tipo` (`Personal` o `Familiar`) y `Nota`
+- En tareas familiares, `Contenido` tambien permite cambiar la `Asignacion`
 - En `Programacion`, la edicion permite cambiar `Fecha/Hora` y `Alerta`
 - La edicion de `Fecha/Hora` ofrece atajos `+30 min`, `+2 horas`, `Mañana`, `Sin fecha` y `Otro...`
 - El wizard de `/nueva` ahora pregunta si quieres agregar una nota despues de definir `Fecha/Hora`; si respondes que si, permite escribirla antes de pedir la prioridad
@@ -187,6 +190,15 @@ Comportamiento actual:
 - si no existe configuracion familiar, se usa la variable global
 - el valor `0` significa `Sin recordatorio`
 
+### Reglas de permisos de tareas
+
+- Las tareas `PERSONAL` solo pueden ser vistas, editadas, completadas o eliminadas por su dueño.
+- Ser administrador familiar no da acceso a tareas personales de otros integrantes.
+- Las tareas `FAMILY` sin asignar pueden ser vistas, editadas y completadas por cualquier integrante de la familia.
+- Las tareas `FAMILY` asignadas pueden ser vistas por toda la familia.
+- Las tareas `FAMILY` asignadas solo pueden ser editadas o completadas por administradores familiares, por quien las creo o por la persona asignada.
+- Las tareas `FAMILY` solo pueden ser eliminadas por administradores familiares.
+
 ### Backlog priorizado
 
 Prioridad actual de trabajo:
@@ -211,6 +223,7 @@ Orden de implementacion recomendado:
 - `Comprar pan mañana`
 - `Tarea familiar: pagar cuentas`
 - `Preparar presentacion Porsche el viernes`
+- `Tarea familiar: revisar alertas mañana a las 09:00 para Ana`
 - nota de voz: `Recuérdame revisar alertas mañana a las 9`
 
 ### Flujo de onboarding
@@ -324,6 +337,7 @@ npm run start:dev
 - Una cuenta de Telegram pertenece a una sola familia
 - Las notas de tareas usan el campo `description` del modelo `Task`
 - Las notas de tareas se validan con un maximo de `1500` caracteres
+- Las tareas familiares usan `assignedToUserId` para representar asignacion a un integrante
 - Las notas de voz de Telegram se transcriben via OpenAI Audio antes de pasar por el parser de tareas
 - La edicion contextual actual de tareas usa menus inline y texto libre solo cuando el usuario debe ingresar un nuevo valor
 - La presentacion del bot en Telegram usa `parse_mode=HTML` para aplicar negritas sin alterar el contenido real de tareas y notas

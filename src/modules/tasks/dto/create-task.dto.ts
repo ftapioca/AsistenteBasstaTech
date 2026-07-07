@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   MaxLength,
+  IsUUID,
 } from 'class-validator';
 import { Priority, TaskScope } from '@prisma/client';
 
@@ -33,4 +34,8 @@ export class CreateTaskDto {
   @IsInt()
   @Min(0)
   reminderMinutesBefore?: number | null;
+
+  @IsOptional()
+  @IsUUID()
+  assignedToUserId?: string | null;
 }

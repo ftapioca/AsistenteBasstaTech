@@ -64,6 +64,7 @@ type BotVoiceContext = BotReplyContext & {
 };
 
 type DisplayTask = {
+  id?: string;
   title: string;
   dueDate: Date | null;
   scope: TaskScope;
@@ -71,6 +72,11 @@ type DisplayTask = {
   description?: string | null;
   status?: TaskStatus;
   reminderMinutesBefore?: number | null;
+  assignedToUserId?: string | null;
+  assignedToUserName?: string | null;
+  assignedToUser?: { id: string; name: string } | null;
+  createdByUserId?: string;
+  createdByUser?: { id: string; name: string } | null;
 };
 
 type BotCallbackContext = BotReplyContext & {
@@ -106,6 +112,7 @@ const WIZARD_DUE_NONE = 'Sin fecha';
 const WIZARD_PRIORITY_HIGH = 'Alta';
 const WIZARD_PRIORITY_MEDIUM = 'Media';
 const WIZARD_PRIORITY_LOW = 'Baja';
+const WIZARD_ASSIGNEE_NONE = 'Sin asignar';
 const WIZARD_NOTE_YES = 'Si, agregar nota';
 const WIZARD_NOTE_NO = 'No, continuar';
 const WIZARD_CONFIRM_CREATE = 'Crear tarea';
@@ -989,12 +996,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       case 'HELP':
         return this.buildHelpHomeResponse();
       case 'CREATE_TASK': {
+        const scope = interpretation.scope ?? TaskScope.PERSONAL;
+        const assignedToUserId = await this.resolveCreateTaskAssignee(
+          user.id,
+          scope,
+          interpretation.assigneeName ?? null,
+        );
         const dto = validateDto(CreateTaskDto, {
           title: interpretation.title ?? ctx.message.text,
           description: interpretation.description ?? null,
-          scope: interpretation.scope ?? TaskScope.PERSONAL,
+          scope,
           priority: interpretation.priority ?? Priority.MEDIUM,
           dueDate: this.normalizeDueDate(interpretation.dueDate),
+          assignedToUserId,
         });
         return this.createTaskWithChecks(ctx, user.id, dto, ctx.message.text);
       }
@@ -1006,6 +1020,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             scope: TaskScope.PERSONAL,
             priority: Priority.MEDIUM,
             dueDate: null,
+            assignedToUserId: user.id,
           });
           await this.tasksService.setPendingAction(String(ctx.chat.id), {
             type: 'CREATE_TASK_CONFIRMATION',
@@ -1805,6 +1820,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       case CALLBACK_WIZARD_CONFIRM:
         return this.handleWizardInput(ctx, user.id, WIZARD_CONFIRM_CREATE);
       default:
+        if (data.startsWith('wizard:assignee:set:')) {
+          const assigneeToken = data.replace('wizard:assignee:set:', '');
+          return this.handleWizardInput(ctx, user.id, `ASSIGNEE:${assigneeToken}`);
+        }
         return null;
     }
   }
@@ -1993,6 +2012,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
+    if (data.startsWith('edit:field:assignee:')) {
+      const taskId = data.replace('edit:field:assignee:', '');
+      const task = await this.tasksService.getEditableTaskById(user.id, taskId);
+      return {
+        answerText: 'Editar asignacion',
+        editText: await this.formatTaskAssigneeMenu(user.id, task),
+        editExtra: this.withHtml(
+          await this.buildTaskAssigneeKeyboard(user.id, task.id, task.assignedToUserId ?? null),
+        ),
+      };
+    }
+
     if (data.startsWith('edit:field:due:')) {
       const taskId = data.replace('edit:field:due:', '');
       const task = await this.tasksService.getEditableTaskById(user.id, taskId);
@@ -2109,6 +2140,27 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
       return {
         answerText: 'Tipo actualizado',
+        editText: this.formatEditSectionMenu(
+          task,
+          'content',
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+        editExtra: this.withHtml(
+          this.buildEditSectionKeyboard(task, 'content'),
+        ),
+      };
+    }
+
+    if (data.startsWith('edit:assignee:set:')) {
+      const [, , , taskId, value] = data.split(':');
+      const task = await this.tasksService.updateTaskAssignee(
+        user.id,
+        taskId,
+        value === 'unassigned' ? null : value,
+      );
+      return {
+        answerText: 'Asignacion actualizada',
         editText: this.formatEditSectionMenu(
           task,
           'content',
@@ -3167,12 +3219,55 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           throw new BadRequestException('Responde "Personal" o "Familiar".');
         }
 
+        if (scope === TaskScope.PERSONAL) {
+          await this.tasksService.setPendingAction(String(ctx.chat.id), {
+            type: 'CREATE_TASK_WIZARD',
+            step: 'DUE_DATE',
+            draft: {
+              ...pendingAction.draft,
+              scope,
+              assignedToUserId: userId,
+              assignedToUserName: null,
+            },
+          });
+          return {
+            text: '¿Para cuándo es? Escribe una fecha natural como "mañana 18:00" o "el viernes en la tarde". Si prefieres, usa el botón "Sin fecha".',
+            extra: this.wizardDueDateInlineKeyboard,
+          };
+        }
+
+        await this.tasksService.setPendingAction(String(ctx.chat.id), {
+          type: 'CREATE_TASK_WIZARD',
+          step: 'ASSIGNEE',
+          draft: {
+            ...pendingAction.draft,
+            scope,
+          },
+        });
+        return {
+          text: await this.formatWizardAssigneePrompt(userId, null),
+          extra: this.withHtml(await this.buildWizardAssigneeKeyboard(userId)),
+        };
+      }
+      case 'ASSIGNEE': {
+        const assigneeToken = text.replace(/^ASSIGNEE:/, '').trim();
+        if (!text.startsWith('ASSIGNEE:')) {
+          throw new BadRequestException(
+            'Usa los botones para elegir a quien asignar la tarea.',
+          );
+        }
+
+        const assignment = await this.resolveWizardAssigneeSelection(
+          userId,
+          assigneeToken,
+        );
         await this.tasksService.setPendingAction(String(ctx.chat.id), {
           type: 'CREATE_TASK_WIZARD',
           step: 'DUE_DATE',
           draft: {
             ...pendingAction.draft,
-            scope,
+            assignedToUserId: assignment.assignedToUserId,
+            assignedToUserName: assignment.assignedToUserName,
           },
         });
         return {
@@ -3285,6 +3380,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             scope: pendingAction.draft.scope ?? TaskScope.PERSONAL,
             priority: pendingAction.draft.priority ?? Priority.MEDIUM,
             dueDate: pendingAction.draft.dueDate ?? null,
+            assignedToUserId:
+              pendingAction.draft.scope === TaskScope.PERSONAL
+                ? userId
+                : pendingAction.draft.assignedToUserId ?? null,
           }),
           pendingAction.draft.dueDateInput ?? '',
         );
@@ -3400,6 +3499,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private formatTaskDraftSummary(draft: {
     title?: string;
     scope?: TaskScope;
+    assignedToUserId?: string | null;
+    assignedToUserName?: string | null;
     dueDate?: string | null;
     dueDateInput?: string | null;
     description?: string | null;
@@ -3419,12 +3520,182 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       'Asi quedaria la tarea',
       `Titulo: ${draft.title ?? '-'}`,
       `Tipo: ${this.formatScopeLabel(draft.scope ?? TaskScope.PERSONAL)}`,
+      `Asignada a: ${this.formatAssigneeLabel(draft)}`,
       `Vence: ${dueDate}`,
       `Nota: ${draft.description?.trim() ?? 'Sin nota'}`,
       `Prioridad: ${this.formatPriorityLabel(draft.priority ?? Priority.MEDIUM)}`,
       '',
       'Responde "Crear tarea" o "si" para confirmarla.',
     ].join('\n');
+  }
+
+  private async resolveCreateTaskAssignee(
+    userId: string,
+    scope: TaskScope,
+    assigneeName: string | null,
+  ) {
+    if (scope === TaskScope.PERSONAL) {
+      return userId;
+    }
+
+    if (!assigneeName?.trim()) {
+      return null;
+    }
+
+    const member = await this.findFamilyMemberByName(userId, assigneeName);
+    if (!member) {
+      throw new BadRequestException(
+        `No encontre a "${assigneeName}" en tu familia.`,
+      );
+    }
+
+    return member.id;
+  }
+
+  private async resolveWizardAssigneeSelection(userId: string, token: string) {
+    if (token === 'unassigned') {
+      return {
+        assignedToUserId: null,
+        assignedToUserName: null,
+      };
+    }
+
+    const members = await this.usersService.listFamilyUsers(userId);
+    const member = members.find((candidate) => candidate.id === token);
+
+    if (!member) {
+      throw new BadRequestException(
+        'La persona seleccionada ya no esta disponible en tu familia.',
+      );
+    }
+
+    return {
+      assignedToUserId: member.id,
+      assignedToUserName: member.name,
+    };
+  }
+
+  private async formatWizardAssigneePrompt(
+    userId: string,
+    assignedToUserId: string | null,
+  ) {
+    const members = await this.usersService.listFamilyUsers(userId);
+    const selected =
+      members.find((member) => member.id === assignedToUserId)?.name ?? null;
+
+    return [
+      this.bold('¿A quien quieres asignar esta tarea familiar?'),
+      '',
+      `${this.bold('Seleccion actual:')} ${this.escapeHtml(selected ?? WIZARD_ASSIGNEE_NONE)}`,
+      '',
+      this.bold('Puedes dejarla sin asignar por ahora.'),
+    ].join('\n');
+  }
+
+  private async buildWizardAssigneeKeyboard(userId: string) {
+    const members = await this.usersService.listFamilyUsers(userId);
+    const rows = members.map((member) => [
+      Markup.button.callback(member.name, `wizard:assignee:set:${member.id}`),
+    ]);
+
+    rows.push([
+      Markup.button.callback(
+        WIZARD_ASSIGNEE_NONE,
+        'wizard:assignee:set:unassigned',
+      ),
+    ]);
+    rows.push([Markup.button.callback(MENU_CANCEL, CALLBACK_WIZARD_CANCEL)]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private async formatTaskAssigneeMenu(
+    userId: string,
+    task: DisplayTask & { id?: string },
+  ) {
+    return [
+      this.bold(`Editar asignacion de "${task.title}"`),
+      `${this.bold('Valor actual:')} ${this.escapeHtml(this.formatAssigneeLabel(task))}`,
+      '',
+      this.bold('Selecciona a una persona de tu familia o deja la tarea sin asignar.'),
+    ].join('\n');
+  }
+
+  private async buildTaskAssigneeKeyboard(
+    userId: string,
+    taskId: string,
+    assignedToUserId: string | null,
+  ) {
+    const members = await this.usersService.listFamilyUsers(userId);
+    const rows = members.map((member) => [
+      Markup.button.callback(
+        `${assignedToUserId === member.id ? '✅ ' : ''}${member.name}`,
+        `edit:assignee:set:${taskId}:${member.id}`,
+      ),
+    ]);
+
+    rows.push([
+      Markup.button.callback(
+        `${assignedToUserId == null ? '✅ ' : ''}${WIZARD_ASSIGNEE_NONE}`,
+        `edit:assignee:set:${taskId}:unassigned`,
+      ),
+    ]);
+    rows.push([
+      Markup.button.callback(
+        '⬅️ Volver',
+        `${CALLBACK_EDIT_SECTION_CONTENT}:${taskId}`,
+      ),
+      Markup.button.callback('Cerrar', `edit:close:${taskId}`),
+    ]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private async findFamilyMemberByName(userId: string, assigneeName: string) {
+    const members = await this.usersService.listFamilyUsers(userId);
+    const normalizedQuery = this.normalizeSearchText(assigneeName);
+    const exact = members.find(
+      (member) => this.normalizeSearchText(member.name) === normalizedQuery,
+    );
+
+    if (exact) {
+      return exact;
+    }
+
+    const partialMatches = members.filter((member) =>
+      this.normalizeSearchText(member.name).includes(normalizedQuery),
+    );
+
+    if (partialMatches.length === 1) {
+      return partialMatches[0];
+    }
+
+    return null;
+  }
+
+  private normalizeSearchText(text: string) {
+    return text
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '');
+  }
+
+  private formatAssigneeLabel(
+    task:
+      | DisplayTask
+      | {
+          scope?: TaskScope;
+          assignedToUserId?: string | null;
+          assignedToUserName?: string | null;
+          assignedToUser?: { id: string; name: string } | null;
+        },
+  ) {
+    if (task.scope === TaskScope.PERSONAL) {
+      return task.assignedToUser?.name ?? task.assignedToUserName ?? 'Tarea personal';
+    }
+
+    return task.assignedToUser?.name ?? task.assignedToUserName ?? 'Sin asignar';
   }
 
   private formatTaskLine(
@@ -3443,8 +3714,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       : 'sin fecha';
     const noteBadge = task.description?.trim() ? '📝' : '';
     const overdueBadge = this.isTaskOverdue(task, timezone) ? '🚨' : '';
+    const assigneeSuffix =
+      task.scope === TaskScope.FAMILY && task.assignedToUser?.name
+        ? ` · para ${task.assignedToUser.name}`
+        : '';
 
-    return `${overdueBadge ? `${overdueBadge} ` : ''}${badges}${noteBadge ? ` ${noteBadge}` : ''} ${task.title} · ${due}`.trim();
+    return `${overdueBadge ? `${overdueBadge} ` : ''}${badges}${noteBadge ? ` ${noteBadge}` : ''} ${task.title} · ${due}${assigneeSuffix}`.trim();
   }
 
   private formatTaskDueText(
@@ -3508,6 +3783,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? 'como tarea familiar 👪'
         : 'como tarea personal 👤';
     const title = this.escapeHtml(task.title);
+    const assignee =
+      task.scope === TaskScope.FAMILY && task.assignedToUser?.name
+        ? ` asignada a ${this.escapeHtml(task.assignedToUser.name)}`
+        : '';
     const due = task.dueDate
       ? this.formatDueLabel(task.dueDate, timezone)
       : 'sin fecha';
@@ -3517,7 +3796,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         : task.priority === Priority.MEDIUM
           ? ' con prioridad media ❕'
           : '';
-    return `"${title}" ${scope}, ${due}${priority}.`;
+    return `"${title}" ${scope}${assignee}, ${due}${priority}.`;
   }
 
   private resolveQuickDueDateOption(
@@ -3599,6 +3878,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.bold('Detalle de tarea'),
       `${this.bold('Titulo:')} ${this.escapeHtml(task.title)}`,
       `${this.bold('Tipo:')} ${this.escapeHtml(this.formatScopeLabel(task.scope))}`,
+      ...(task.scope === TaskScope.FAMILY
+        ? [
+            `${this.bold('Creada por:')} ${this.escapeHtml(task.createdByUser?.name ?? 'Sin dato')}`,
+          ]
+        : []),
+      `${this.bold('Asignada a:')} ${this.escapeHtml(this.formatAssigneeLabel(task))}`,
       `${this.bold('Vence:')} ${this.escapeHtml(due)}`,
       `${this.bold('Prioridad:')} ${this.escapeHtml(
         this.formatPriorityLabel(task.priority ?? Priority.MEDIUM),
@@ -4043,6 +4328,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return [
       this.bold('Editar tarea'),
       `${this.bold('Titulo:')} ${this.escapeHtml(task.title)}`,
+      `${this.bold('Asignada a:')} ${this.escapeHtml(this.formatAssigneeLabel(task))}`,
       `${this.bold('Vence:')} ${this.escapeHtml(due)}`,
       `${this.bold('Nota:')} ${task.description?.trim() ? 'Sí' : 'No'}`,
       `${this.bold('Alerta:')} ${this.escapeHtml(
@@ -4099,6 +4385,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.bold('Editar contenido'),
         `${this.bold('Titulo actual:')} ${this.escapeHtml(task.title)}`,
         `${this.bold('Tipo:')} ${this.escapeHtml(this.formatScopeLabel(task.scope))}`,
+        `${this.bold('Asignada a:')} ${this.escapeHtml(this.formatAssigneeLabel(task))}`,
         `${this.bold('Nota:')} ${task.description?.trim() ? 'Sí' : 'No'}`,
         '',
         this.bold('¿Que parte del contenido quieres cambiar?'),
@@ -4142,6 +4429,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
                 `edit:field:scope:${task.id}`,
               ),
             ],
+            ...(task.scope === TaskScope.FAMILY
+              ? [[
+                  Markup.button.callback(
+                    '👥 Asignacion',
+                    `edit:field:assignee:${task.id}`,
+                  ),
+                ]]
+              : []),
             [
               Markup.button.callback(
                 task.description?.trim() ? '📝 Editar nota' : '📝 Agregar nota',
@@ -4570,6 +4865,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '',
           this.bold('Que puedes cambiar:'),
           '- titulo',
+          '- asignacion en tareas familiares',
           '- fecha y hora',
           '- nota',
           '- alerta',
@@ -4609,7 +4905,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.bold('Vinculacion del integrante:'),
           'La persona debe escribir /start y compartir su contacto.',
           '',
+          'Ser admin no permite ver tareas personales de otros integrantes.',
           'Las tareas familiares pueden ser vistas por la familia.',
+          'Las tareas familiares asignadas solo pueden ser editadas o completadas por admins, quien la asigno o la persona asignada.',
         ].join('\n');
       case 'commands':
         return [

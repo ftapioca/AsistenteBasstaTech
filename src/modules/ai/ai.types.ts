@@ -16,6 +16,7 @@ export type AiInterpretation = {
   title?: string | null;
   description?: string | null;
   scope?: TaskScope | null;
+  assigneeName?: string | null;
   priority?: Priority | null;
   dueDate?: string | null;
   taskIndex?: number | null;
