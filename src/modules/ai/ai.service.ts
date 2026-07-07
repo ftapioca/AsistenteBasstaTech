@@ -75,7 +75,6 @@ export class AiService {
         model: preferredModel,
         language: input.language ?? 'es',
         response_format: 'json',
-        include: ['logprobs'],
         temperature: 0,
       });
       const text = transcription.text.trim();
@@ -86,9 +85,7 @@ export class AiService {
 
       return {
         text,
-        lowConfidence: this.isLowConfidenceTranscription(
-          transcription.logprobs,
-        ),
+        lowConfidence: false,
       };
     } catch (error) {
       const details = this.formatOpenAiError(error);
