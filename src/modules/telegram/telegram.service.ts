@@ -662,28 +662,52 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listTodayTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.buildTaskListResponse('today', tasks, true, true);
+    return this.buildTaskListResponse(
+      'today',
+      tasks,
+      true,
+      true,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListPending(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listPendingTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.buildTaskListResponse('pending', tasks, true, true);
+    return this.buildTaskListResponse(
+      'pending',
+      tasks,
+      true,
+      true,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListFamily(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listFamilyTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.buildTaskListResponse('family', tasks, true, true);
+    return this.buildTaskListResponse(
+      'family',
+      tasks,
+      true,
+      true,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListCompleted(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const tasks = await this.tasksService.listCompletedTasks(user.id);
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
-    return this.buildTaskListResponse('completed', tasks, false, false);
+    return this.buildTaskListResponse(
+      'completed',
+      tasks,
+      false,
+      false,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleComplete(ctx: BotTextContext) {
@@ -1030,8 +1054,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     tasks: DisplayTask[],
     allowBulkComplete: boolean,
     allowBulkDelete: boolean,
+    timezone = this.configService.get<string>(
+      'DEFAULT_TIMEZONE',
+      'America/Santiago',
+    ),
   ): BotResponse {
-    const text = this.formatTaskList(listType, tasks);
+    const text = this.formatTaskList(listType, tasks, timezone);
     const keyboard = this.buildTaskListKeyboard(
       tasks,
       allowBulkComplete,
@@ -1138,24 +1166,25 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const others: string[] = [];
 
     tasks.forEach((task, index) => {
-      const line = `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`;
+      const lineForToday = `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`;
+      const lineForOtherDate = `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, true)}`;
       if (this.isTaskOverdue(task, timezone)) {
-        overdue.push(line);
+        overdue.push(lineForToday);
         return;
       }
 
       if (!task.dueDate) {
-        others.push(line);
+        others.push(lineForOtherDate);
         return;
       }
 
       const due = DateTime.fromJSDate(task.dueDate).setZone(timezone);
       if (due.hasSame(now, 'day')) {
-        today.push(line);
+        today.push(lineForToday);
         return;
       }
 
-      others.push(line);
+      others.push(lineForOtherDate);
     });
 
     const sections = [this.bold(headings[listType])];
