@@ -34,6 +34,7 @@ Backend MVP para un asistente familiar de productividad basado en Telegram.
 - Indicador visual `📝` para tareas con nota
 - Vista de detalle con `/ver N`
 - Notas por tarea con `/nota N`
+- Creacion de tareas desde notas de voz de Telegram usando transcripcion con OpenAI
 - Edicion contextual de tareas con `/editar`
 - Alertas configurables por usuario con `/alertas`, separando recordatorios y briefing diario
 - Override de alertas por tarea desde el editor contextual
@@ -55,6 +56,7 @@ Variables clave:
 - `TELEGRAM_BOT_TOKEN`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL` default: `gpt-5.4-mini`
+- `OPENAI_TRANSCRIPTION_MODEL` opcional. Recomendado: `gpt-4o-mini-transcribe-2025-12-15`
 - `DATABASE_URL`
 - `DEFAULT_TIMEZONE`
 - `DEFAULT_DAILY_BRIEFING_TIME`
@@ -145,6 +147,7 @@ La API HTTP queda en `http://localhost:3000`:
 - El boton inferior principal para listar pendientes ahora aparece como `Ver tareas`
 - `/ver N` muestra el detalle de una tarea y su nota actual
 - `/nota N` permite crear, editar o borrar la nota asociada a una tarea
+- Las notas aceptan hasta `1500` caracteres
 - La lista de pendientes muestra acciones contextuales para `Ver tarea`, `Completar varias` y `Eliminar varias`
 - `Ver tarea` abre una seleccion inline de tareas, muestra el detalle y desde ahi permite `Marcar como completada` o `Editar`
 - Al marcar una tarea como completada desde `Ver tarea`, el bot pide confirmacion antes de cerrar la accion
@@ -208,6 +211,7 @@ Orden de implementacion recomendado:
 - `Comprar pan mañana`
 - `Tarea familiar: pagar cuentas`
 - `Preparar presentacion Porsche el viernes`
+- nota de voz: `Recuérdame revisar alertas mañana a las 9`
 
 ### Flujo de onboarding
 
@@ -319,5 +323,7 @@ npm run start:dev
 - Este MVP solo soporta chat privado con el bot
 - Una cuenta de Telegram pertenece a una sola familia
 - Las notas de tareas usan el campo `description` del modelo `Task`
+- Las notas de tareas se validan con un maximo de `1500` caracteres
+- Las notas de voz de Telegram se transcriben via OpenAI Audio antes de pasar por el parser de tareas
 - La edicion contextual actual de tareas usa menus inline y texto libre solo cuando el usuario debe ingresar un nuevo valor
 - La presentacion del bot en Telegram usa `parse_mode=HTML` para aplicar negritas sin alterar el contenido real de tareas y notas

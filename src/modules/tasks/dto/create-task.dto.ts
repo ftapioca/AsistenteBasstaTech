@@ -16,7 +16,7 @@ export class CreateTaskDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(500)
+  @MaxLength(1500)
   description?: string | null;
 
   @IsEnum(TaskScope)

@@ -789,7 +789,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
     if (!match) {
       throw new BadRequestException(
-        'Formato invalido. Usa /nota N o /nota N texto.',
+        'Formato invalido. Usa /nota N o /nota N texto. La nota puede tener hasta 1500 caracteres.',
       );
     }
 
@@ -829,7 +829,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           ? `${this.bold('Nota actual:')}\n${this.escapeHtml(task.description)}`
           : 'Actualmente no tiene nota.',
         '',
-        this.bold('Escribe la nueva nota. Puede tener varias lineas.'),
+        this.bold(
+          'Escribe la nueva nota. Puede tener varias lineas y hasta 1500 caracteres.',
+        ),
         this.bold(
           'Si quieres borrar la nota, usa el boton correspondiente o responde "Borrar".',
         ),
@@ -2051,7 +2053,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             ? `Nota actual:\n${task.description}`
             : 'Actualmente no tiene nota.',
           '',
-          this.bold('Escribe la nueva nota. Puede tener varias lineas.'),
+          this.bold(
+            'Escribe la nueva nota. Puede tener varias lineas y hasta 1500 caracteres.',
+          ),
           'Si prefieres salir, responde "Cancelar".',
         ].join('\n'),
         editExtra: this.withHtml(this.buildEditNoteKeyboard(task)),
@@ -3186,7 +3190,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             },
           });
           return {
-            text: 'Escribe la nota que quieres guardar en la tarea.',
+            text: 'Escribe la nota que quieres guardar en la tarea. Puede tener hasta 1500 caracteres.',
             extra: this.withHtml(),
           };
         }
