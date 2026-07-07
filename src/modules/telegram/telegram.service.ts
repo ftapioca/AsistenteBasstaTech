@@ -3894,8 +3894,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       .filter(Boolean)
       .join(' ');
     const due = task.dueDate
-      ? this.formatTaskDueText(task.dueDate, timezone, includeDate)
-      : 'sin fecha';
+      ? ` · ${this.formatTaskDueText(task.dueDate, timezone, includeDate)}`
+      : '';
     const noteBadge = task.description?.trim() ? '📝' : '';
     const overdueBadge = this.isTaskOverdue(task, timezone) ? '🚨' : '';
     const assigneeSuffix =
@@ -3903,7 +3903,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ? ` · para ${task.assignedToUser.name}`
         : '';
 
-    return `${overdueBadge ? `${overdueBadge} ` : ''}${badges}${noteBadge ? ` ${noteBadge}` : ''} ${task.title} · ${due}${assigneeSuffix}`.trim();
+    return `${overdueBadge ? `${overdueBadge} ` : ''}${badges}${noteBadge ? ` ${noteBadge}` : ''} ${task.title}${due}${assigneeSuffix}`.trim();
   }
 
   private formatTaskDueText(
