@@ -595,12 +595,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         mimeType: ctx.message.voice.mime_type ?? 'audio/ogg',
         language: 'es',
       });
+      this.logger.log(
+        `Transcripcion lista para ${ctx.from.id}: ${transcription.text}`,
+      );
       const textContext: BotTextContext = {
         ...ctx,
         message: {
           text: transcription.text,
         },
       };
+      this.logger.log(`Derivando nota de voz a flujo NLP para ${ctx.from.id}`);
       const reply = await this.handleNaturalLanguage(textContext);
 
       if (!transcription.lowConfidence) {

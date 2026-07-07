@@ -75,6 +75,7 @@ export class AiService {
 
     for (const model of candidateModels) {
       try {
+        this.logger.log(`Intentando transcripcion con modelo ${model}`);
         return await this.requestTranscription(input, model, apiKey);
       } catch (error) {
         lastError = this.formatOpenAiError(error);
@@ -332,11 +333,11 @@ export class AiService {
   ): Promise<AiTranscription> {
     const form = new FormData();
     const bytes = new Uint8Array(input.audio);
-    const blob = new Blob([bytes], {
+    const file = new File([bytes], input.fileName ?? 'voice-note.ogg', {
       type: input.mimeType ?? 'audio/ogg',
     });
 
-    form.append('file', blob, input.fileName ?? 'voice-note.ogg');
+    form.append('file', file);
     form.append('model', model);
     form.append('response_format', 'json');
     form.append('temperature', '0');
@@ -345,6 +346,9 @@ export class AiService {
       form.append('language', input.language.trim());
     }
 
+    this.logger.log(
+      `Enviando audio a OpenAI. model=${model} bytes=${input.audio.byteLength} mime=${input.mimeType ?? 'audio/ogg'}`,
+    );
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
       headers: {
@@ -354,6 +358,9 @@ export class AiService {
     });
 
     const bodyText = await response.text();
+    this.logger.log(
+      `Respuesta de OpenAI transcriptions. model=${model} status=${response.status}`,
+    );
 
     if (!response.ok) {
       throw new Error(
