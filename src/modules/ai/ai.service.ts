@@ -59,26 +59,56 @@ export class AiService {
         type: input.mimeType ?? 'audio/ogg',
       },
     );
-    const transcription = await this.client.audio.transcriptions.create({
+    const preferredModel = this.configService.get<string>(
+      'OPENAI_TRANSCRIPTION_MODEL',
+      'gpt-4o-transcribe',
+    );
+
+    try {
+      const transcription = await this.client.audio.transcriptions.create({
+        file,
+        model: preferredModel,
+        language: input.language ?? 'es',
+        response_format: 'json',
+        include: ['logprobs'],
+        temperature: 0,
+      });
+      const text = transcription.text.trim();
+
+      if (!text) {
+        throw new Error('La transcripcion llego vacia.');
+      }
+
+      return {
+        text,
+        lowConfidence: this.isLowConfidenceTranscription(
+          transcription.logprobs,
+        ),
+      };
+    } catch (error) {
+      const details =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.warn(
+        `Fallo transcripcion con ${preferredModel}. Reintentando con whisper-1. ${details}`,
+      );
+    }
+
+    const fallbackTranscription = await this.client.audio.transcriptions.create({
       file,
-      model: this.configService.get<string>(
-        'OPENAI_TRANSCRIPTION_MODEL',
-        'gpt-4o-mini-transcribe',
-      ),
+      model: 'whisper-1',
       language: input.language ?? 'es',
       response_format: 'json',
-      include: ['logprobs'],
       temperature: 0,
     });
-    const text = transcription.text.trim();
+    const fallbackText = fallbackTranscription.text.trim();
 
-    if (!text) {
+    if (!fallbackText) {
       throw new Error('La transcripcion llego vacia.');
     }
 
     return {
-      text,
-      lowConfidence: this.isLowConfidenceTranscription(transcription.logprobs),
+      text: fallbackText,
+      lowConfidence: false,
     };
   }
 
