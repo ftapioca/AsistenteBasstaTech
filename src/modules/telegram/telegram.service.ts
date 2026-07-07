@@ -103,6 +103,7 @@ type BulkCallbackResult = {
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 const MENU_NEW_TASK = '📝 Nueva tarea';
 const MENU_PENDING = '📋 Ver tareas';
+const MENU_PENDING_LEGACY = '📋 Pendientes';
 const MENU_EDIT_FAMILY = '👨‍👩‍👧 Editar familia';
 const MENU_HELP = '❓ Ayuda';
 const MENU_CANCEL = 'Cancelar';
@@ -1503,6 +1504,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       case MENU_NEW_TASK:
         return this.startTaskWizard(ctx);
       case MENU_PENDING:
+      case MENU_PENDING_LEGACY:
+      case 'Pendientes':
         return this.handleListPending(ctx);
       case MENU_EDIT_FAMILY:
         return this.handleFamilyManagement(ctx);
