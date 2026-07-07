@@ -58,27 +58,35 @@ export class AiService {
       throw new Error('OPENAI_API_KEY no configurado para transcripcion.');
     }
 
-    const preferredModel = this.configService.get<string>(
+    const configuredModel = this.configService.get<string>(
       'OPENAI_TRANSCRIPTION_MODEL',
+    );
+    const candidateModels = [
+      configuredModel?.trim(),
+      'gpt-4o-mini-transcribe-2025-12-15',
+      'gpt-4o-mini-transcribe',
       'gpt-4o-transcribe',
+      'whisper-1',
+    ].filter((model, index, list): model is string =>
+      Boolean(model) && list.indexOf(model) === index,
     );
 
-    try {
-      return await this.requestTranscription(input, preferredModel, apiKey);
-    } catch (error) {
-      const details = this.formatOpenAiError(error);
-      this.logger.warn(
-        `Fallo transcripcion con ${preferredModel}. Reintentando con whisper-1. ${details}`,
-      );
+    let lastError: string | null = null;
+
+    for (const model of candidateModels) {
+      try {
+        return await this.requestTranscription(input, model, apiKey);
+      } catch (error) {
+        lastError = this.formatOpenAiError(error);
+        this.logger.warn(
+          `Fallo transcripcion con ${model}. Probando siguiente fallback. ${lastError}`,
+        );
+      }
     }
 
-    try {
-      return await this.requestTranscription(input, 'whisper-1', apiKey);
-    } catch (error) {
-      throw new Error(
-        `Fallo transcripcion fallback whisper-1: ${this.formatOpenAiError(error)}`,
-      );
-    }
+    throw new Error(
+      `Fallo transcripcion para todos los modelos configurados. Ultimo error: ${lastError ?? 'sin detalle'}`,
+    );
   }
 
   async interpretMessage(
