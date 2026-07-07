@@ -20,3 +20,8 @@ export type AiInterpretation = {
   dueDate?: string | null;
   taskIndex?: number | null;
 };
+
+export type AiTranscription = {
+  text: string;
+  lowConfidence: boolean;
+};

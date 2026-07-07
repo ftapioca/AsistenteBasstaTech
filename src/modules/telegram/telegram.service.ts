@@ -52,6 +52,17 @@ type BotContactContext = BotReplyContext & {
   };
 };
 
+type BotVoiceContext = BotReplyContext & {
+  message: {
+    voice: {
+      file_id: string;
+      mime_type?: string;
+      duration: number;
+      file_size?: number;
+    };
+  };
+};
+
 type DisplayTask = {
   title: string;
   dueDate: Date | null;
@@ -326,6 +337,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.safeReply(typedCtx, this.handleContact(typedCtx));
     });
 
+    this.bot.on(message('voice'), async (ctx) => {
+      const typedCtx = ctx as unknown as BotVoiceContext;
+      await this.safeReply(typedCtx, this.handleVoiceMessage(typedCtx));
+    });
+
     this.bot.action(/^wizard:/, async (ctx) => {
       const typedCtx = ctx as unknown as BotCallbackContext & {
         callbackQuery: { data?: string };
@@ -565,6 +581,36 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
+  }
+
+  private async handleVoiceMessage(ctx: BotVoiceContext): Promise<BotResponse> {
+    try {
+      const audio = await this.downloadTelegramFile(ctx.message.voice.file_id);
+      const transcription = await this.aiService.transcribeVoiceNote({
+        audio,
+        fileName: 'telegram-voice.ogg',
+        mimeType: ctx.message.voice.mime_type ?? 'audio/ogg',
+        language: 'es',
+      });
+      const textContext: BotTextContext = {
+        ...ctx,
+        message: {
+          text: transcription.text,
+        },
+      };
+      const reply = await this.handleNaturalLanguage(textContext);
+
+      if (!transcription.lowConfidence) {
+        return reply;
+      }
+
+      return this.prependVoiceTranscript(reply, transcription.text);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Error desconocido';
+      this.logger.warn(`No se pudo procesar la nota de voz: ${message}`);
+      return 'No pude entender ese audio. Intenta de nuevo o escríbelo.';
+    }
   }
 
   private async handleCreateUser(ctx: BotTextContext) {
@@ -943,6 +989,22 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async downloadTelegramFile(fileId: string) {
+    if (!this.bot) {
+      throw new Error('Telegram no esta inicializado.');
+    }
+
+    const fileUrl = await this.bot.telegram.getFileLink(fileId);
+    const response = await fetch(fileUrl);
+
+    if (!response.ok) {
+      throw new Error(`No se pudo descargar el archivo de Telegram (${response.status}).`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
   private async requireRegisteredUser(ctx: BotReplyContext) {
     const user = await this.usersService.findByTelegramUserId(
       String(ctx.from.id),
@@ -1128,6 +1190,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return reply;
+  }
+
+  private prependVoiceTranscript(reply: BotResponse, transcript: string): BotResponse {
+    if (typeof reply === 'string') {
+      return `Escuche: "${transcript}"\n\n${reply}`;
+    }
+
+    return {
+      ...reply,
+      text: `Escuche: "${this.escapeHtml(transcript)}"\n\n${reply.text}`,
+    };
   }
 
   private resolveReplyExtra(

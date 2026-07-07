@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Priority, TaskScope } from '@prisma/client';
 import { DateTime } from 'luxon';
-import OpenAI from 'openai';
+import OpenAI, { toFile } from 'openai';
 import { z } from 'zod';
-import { AiInterpretation } from './ai.types';
+import { AiInterpretation, AiTranscription } from './ai.types';
 
 const nullableEnum = (values: string[]) => ({
   anyOf: [{ type: 'string', enum: values }, { type: 'null' }],
@@ -40,6 +40,46 @@ export class AiService {
     if (apiKey) {
       this.client = new OpenAI({ apiKey });
     }
+  }
+
+  async transcribeVoiceNote(input: {
+    audio: Buffer;
+    fileName?: string;
+    mimeType?: string;
+    language?: string;
+  }): Promise<AiTranscription> {
+    if (!this.client) {
+      throw new Error('OpenAI no esta configurado para transcripcion.');
+    }
+
+    const file = await toFile(
+      input.audio,
+      input.fileName ?? 'voice-note.ogg',
+      {
+        type: input.mimeType ?? 'audio/ogg',
+      },
+    );
+    const transcription = await this.client.audio.transcriptions.create({
+      file,
+      model: this.configService.get<string>(
+        'OPENAI_TRANSCRIPTION_MODEL',
+        'gpt-4o-mini-transcribe',
+      ),
+      language: input.language ?? 'es',
+      response_format: 'json',
+      include: ['logprobs'],
+      temperature: 0,
+    });
+    const text = transcription.text.trim();
+
+    if (!text) {
+      throw new Error('La transcripcion llego vacia.');
+    }
+
+    return {
+      text,
+      lowConfidence: this.isLowConfidenceTranscription(transcription.logprobs),
+    };
   }
 
   async interpretMessage(
@@ -231,5 +271,26 @@ export class AiService {
         ? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
         : null,
     };
+  }
+
+  private isLowConfidenceTranscription(
+    logprobs?: Array<{ logprob?: number }>,
+  ) {
+    if (!logprobs || logprobs.length === 0) {
+      return false;
+    }
+
+    const values = logprobs
+      .map((item) => item.logprob)
+      .filter((value): value is number => typeof value === 'number');
+
+    if (values.length === 0) {
+      return false;
+    }
+
+    const averageLogprob =
+      values.reduce((sum, value) => sum + value, 0) / values.length;
+
+    return averageLogprob < -0.8;
   }
 }
