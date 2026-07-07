@@ -21,6 +21,10 @@ Este archivo resume los cambios relevantes del proyecto a partir del historial d
   - retry simple para fallos transitorios
   - rescate dentro de `REMINDER_OVERDUE_GRACE_MINUTES`
   - sin reenvio si el envio ya fue exitoso y luego cambian preferencias
+- Se mejora la gestion familiar del bot:
+  - nueva vista `Ver miembros` con detalle por integrante
+  - separacion explicita entre `Invitar miembro` y `Agregar miembro manualmente`
+  - acciones directas desde el detalle para editar nombre, resetear vinculacion y quitar miembro
 
 ## 2026-07-07
 

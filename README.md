@@ -168,6 +168,8 @@ La API HTTP queda en `http://localhost:3000`:
 - El briefing diario ahora separa `Vencidas`, `Hoy`, `Proximas` y `Sin fecha` para evitar perder visibilidad de otras tareas abiertas
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
 - `Editar familia` ahora muestra una pantalla inicial de acciones: `Renombrar familia`, `Agregar miembro`, `Quitar miembro` y `Cerrar`
+- `Editar familia` ahora tambien permite `Ver miembros`, `Invitar miembro` y `Agregar miembro manualmente`
+- `Ver miembros` abre una lista con rol y estado de vinculacion; desde el detalle puedes `Editar nombre`, `Resetear vinculacion` y `Quitar miembro`
 - `Quitar miembro` abre un segundo paso con seleccion multiple de integrantes y boton `Eliminar`
 - en esos flujos, `Volver` regresa al paso anterior y `Cerrar` quita los botones inline del mensaje para no dejar la interfaz abierta
 - el menu principal del bot ahora depende del rol; `Editar familia` solo aparece para administradores
@@ -346,6 +348,7 @@ npm run start:dev
 - Las notas de tareas se validan con un maximo de `1500` caracteres
 - Las tareas familiares usan `assignedToUserId` para representar asignacion a un integrante
 - Las entregas de recordatorio quedan auditadas en `TaskReminderDelivery` por usuario y vencimiento
+- La gestion familiar inline ahora permite consultar detalle operativo de integrantes y corregir su vinculacion Telegram
 - Las notas de voz de Telegram se transcriben via OpenAI Audio antes de pasar por el parser de tareas
 - La edicion contextual actual de tareas usa menus inline y texto libre solo cuando el usuario debe ingresar un nuevo valor
 - La presentacion del bot en Telegram usa `parse_mode=HTML` para aplicar negritas sin alterar el contenido real de tareas y notas

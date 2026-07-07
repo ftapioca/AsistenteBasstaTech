@@ -135,6 +135,10 @@ type PendingAction =
       type: 'RENAME_FAMILY_WIZARD';
     }
   | {
+      type: 'RENAME_FAMILY_MEMBER_WIZARD';
+      memberUserId: string;
+    }
+  | {
       type: 'FAMILY_REMOVE_WIZARD';
       memberIds: string[];
       selectedMemberIds: string[];

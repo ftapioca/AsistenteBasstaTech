@@ -79,3 +79,11 @@ Este documento aterriza la politica funcional en acciones concretas del bot para
 
 - Definir si una reasignacion debe conservar a `createdByUserId` como creador historico o si se necesita un campo nuevo tipo `assignedByUserId`.
 - Agregar tests funcionales del flujo Telegram para `wizard`, `editar asignacion` y `ver detalle`.
+
+## Gestion familiar relacionada
+
+- El administrador familiar dispone de una vista de miembros con rol y estado de vinculacion.
+- Desde el detalle de un integrante puede:
+  - editar el nombre visible
+  - resetear su vinculacion Telegram si quedo mal enlazado
+  - quitarlo de la familia si no es admin

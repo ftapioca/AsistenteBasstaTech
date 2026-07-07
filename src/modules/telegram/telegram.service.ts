@@ -143,8 +143,9 @@ const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
 const CALLBACK_BULK_CONFIRM_DELETE = 'bulk:confirm:delete';
 const CALLBACK_FAMILY_CANCEL = 'family:cancel';
 const CALLBACK_FAMILY_CLOSE = 'family:close';
-const CALLBACK_FAMILY_ADD_MEMBER = 'family:add_member';
-const CALLBACK_FAMILY_INVITE_LINK = 'family:invite_link';
+const CALLBACK_FAMILY_VIEW_MEMBERS = 'family:view_members';
+const CALLBACK_FAMILY_INVITE_MEMBER = 'family:invite_member';
+const CALLBACK_FAMILY_ADD_MEMBER_MANUAL = 'family:add_member_manual';
 const CALLBACK_FAMILY_SKIP_ONBOARDING = 'family:skip_onboarding';
 const CALLBACK_FAMILY_RENAME = 'family:rename';
 const CALLBACK_FAMILY_START_REMOVE = 'family:start_remove';
@@ -930,6 +931,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const renameFamilyReply = await this.tryHandleRenameFamilyText(ctx);
     if (renameFamilyReply) {
       return renameFamilyReply;
+    }
+
+    const renameFamilyMemberReply = await this.tryHandleRenameFamilyMemberText(
+      ctx,
+    );
+    if (renameFamilyMemberReply) {
+      return renameFamilyMemberReply;
     }
 
     const wizardReply = await this.tryHandleTaskWizard(ctx, user.id);
@@ -2388,7 +2396,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    if (data === CALLBACK_FAMILY_ADD_MEMBER) {
+    if (data === CALLBACK_FAMILY_VIEW_MEMBERS) {
+      const members = await this.usersService.listFamilyMembersForAdmin(user.id);
+      return {
+        answerText: 'Miembros',
+        editText: this.formatFamilyMembersPrompt(members),
+        editExtra: this.withHtml(this.buildFamilyMembersKeyboard(members)),
+      };
+    }
+
+    if (data === CALLBACK_FAMILY_INVITE_MEMBER || data === 'family:add_member') {
       const inviteLink = await this.buildFamilyInviteLink(user.familyId);
       return {
         answerText: 'Link de invitacion',
@@ -2407,7 +2424,113 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    if (data === CALLBACK_FAMILY_INVITE_LINK) {
+    if (data.startsWith('family:member:view:')) {
+      const memberUserId = data.replace('family:member:view:', '');
+      const member = await this.usersService.getFamilyMemberForAdmin(
+        user.id,
+        memberUserId,
+      );
+
+      return {
+        answerText: 'Detalle del miembro',
+        editText: this.formatFamilyMemberDetail(member),
+        editExtra: this.withHtml(this.buildFamilyMemberDetailKeyboard(member)),
+      };
+    }
+
+    if (data.startsWith('family:member:rename:')) {
+      const memberUserId = data.replace('family:member:rename:', '');
+      const member = await this.usersService.getFamilyMemberForAdmin(
+        user.id,
+        memberUserId,
+      );
+      await this.tasksService.setPendingAction(String(ctx.chat.id), {
+        type: 'RENAME_FAMILY_MEMBER_WIZARD',
+        memberUserId,
+      });
+
+      return {
+        answerText: 'Editar nombre',
+        clearMarkup: true,
+        reply: [
+          this.bold(`Nombre actual: "${member.name}"`),
+          '',
+          this.bold('Escribe el nuevo nombre del integrante.'),
+          this.bold('Si prefieres salir, responde "Cancelar".'),
+        ].join('\n'),
+      };
+    }
+
+    if (data.startsWith('family:member:reset_link:')) {
+      const memberUserId = data.replace('family:member:reset_link:', '');
+      const member = await this.usersService.getFamilyMemberForAdmin(
+        user.id,
+        memberUserId,
+      );
+
+      return {
+        answerText: 'Confirmar reset',
+        editText: this.formatFamilyMemberResetPrompt(member),
+        editExtra: this.withHtml(
+          this.buildFamilyMemberResetConfirmKeyboard(member.id),
+        ),
+      };
+    }
+
+    if (data.startsWith('family:member:reset_confirm:')) {
+      const memberUserId = data.replace('family:member:reset_confirm:', '');
+      const member = await this.usersService.resetFamilyMemberTelegramForAdmin(
+        user.id,
+        memberUserId,
+      );
+
+      return {
+        answerText: 'Vinculacion reseteada',
+        editText: [
+          this.bold('Vinculacion reseteada'),
+          '',
+          this.formatFamilyMemberDetail(member),
+        ].join('\n'),
+        editExtra: this.withHtml(this.buildFamilyMemberDetailKeyboard(member)),
+      };
+    }
+
+    if (data.startsWith('family:member:remove:')) {
+      const memberUserId = data.replace('family:member:remove:', '');
+      const member = await this.usersService.getFamilyMemberForAdmin(
+        user.id,
+        memberUserId,
+      );
+
+      return {
+        answerText: 'Confirmar eliminacion',
+        editText: this.formatFamilyMemberRemovalPrompt(member),
+        editExtra: this.withHtml(
+          this.buildFamilyMemberRemovalConfirmKeyboard(member.id),
+        ),
+      };
+    }
+
+    if (data.startsWith('family:member:remove_confirm:')) {
+      const memberUserId = data.replace('family:member:remove_confirm:', '');
+      const removedUser = await this.usersService.deactivateManagedUser(
+        user.id,
+        memberUserId,
+      );
+      const members = await this.usersService.listFamilyMembersForAdmin(user.id);
+
+      return {
+        answerText: 'Integrante quitado',
+        editText: this.formatFamilyMembersPrompt(members),
+        editExtra: this.withHtml(this.buildFamilyMembersKeyboard(members)),
+        reply: `Listo. Quite a ${removedUser.name} de la familia.`,
+      };
+    }
+
+    if (
+      data === CALLBACK_FAMILY_ADD_MEMBER_MANUAL ||
+      data === 'family:invite_link'
+    ) {
       await this.tasksService.setPendingAction(String(ctx.chat.id), {
         type: 'ADD_MEMBER_WIZARD',
         step: 'NAME',
@@ -2730,6 +2853,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return {
       text: this.bold(`Listo. La familia ahora se llama "${family.name}".`),
       extra: this.withHtml(this.buildFamilyManagementKeyboard()),
+    };
+  }
+
+  private async tryHandleRenameFamilyMemberText(
+    ctx: BotTextContext,
+  ): Promise<BotResponse | null> {
+    const pendingAction = await this.tasksService.getPendingAction(
+      String(ctx.chat.id),
+    );
+    if (
+      !pendingAction ||
+      pendingAction.type !== 'RENAME_FAMILY_MEMBER_WIZARD'
+    ) {
+      return null;
+    }
+
+    const text = ctx.message.text.trim();
+    const lowered = text.toLowerCase();
+
+    if (lowered === 'cancelar' || text === MENU_CANCEL) {
+      await this.tasksService.clearPendingAction(String(ctx.chat.id));
+      return 'Listo, cancelé el cambio de nombre del integrante.';
+    }
+
+    if (!text) {
+      throw new BadRequestException(
+        'Escribe un nombre valido para el integrante.',
+      );
+    }
+
+    const user = await this.requireRegisteredUser(ctx);
+    const member = await this.usersService.renameFamilyMemberForAdmin(
+      user.id,
+      pendingAction.memberUserId,
+      text,
+    );
+    await this.tasksService.clearPendingAction(String(ctx.chat.id));
+
+    return {
+      text: [
+        this.bold('Nombre actualizado'),
+        '',
+        this.formatFamilyMemberDetail(member),
+      ].join('\n'),
+      extra: this.withHtml(this.buildFamilyMemberDetailKeyboard(member)),
     };
   }
 
@@ -3967,8 +4135,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return Markup.inlineKeyboard([
       [
         Markup.button.callback(
-          '➕ Agregar usuarios',
-          CALLBACK_FAMILY_ADD_MEMBER,
+          '🔗 Generar link',
+          CALLBACK_FAMILY_INVITE_MEMBER,
         ),
       ],
       [Markup.button.callback('Omitir', CALLBACK_FAMILY_SKIP_ONBOARDING)],
@@ -4021,9 +4189,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       '',
       this.bold('¿Que quieres hacer?'),
       '',
-      this.bold('Invitar miembros:'),
+      this.bold('Miembros:'),
       this.escapeHtml(
-        'Genera un link para compartir y que cada persona se vincule sola.',
+        'Revisa quienes integran la familia y su estado de vinculacion.',
+      ),
+      '',
+      this.bold('Altas:'),
+      this.escapeHtml(
+        'Invita con link o carga manualmente a una persona antes de que se vincule.',
       ),
       '',
       this.bold('Administracion:'),
@@ -4035,11 +4208,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private buildFamilyManagementKeyboard() {
     return Markup.inlineKeyboard([
+      [Markup.button.callback('👥 Ver miembros', CALLBACK_FAMILY_VIEW_MEMBERS)],
+      [
+        Markup.button.callback(
+          '🔗 Invitar miembro',
+          CALLBACK_FAMILY_INVITE_MEMBER,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '➕ Agregar miembro manualmente',
+          CALLBACK_FAMILY_ADD_MEMBER_MANUAL,
+        ),
+      ],
       [Markup.button.callback('✏️ Renombrar familia', CALLBACK_FAMILY_RENAME)],
       [
         Markup.button.callback(
-          '🔗 Link de invitacion',
-          CALLBACK_FAMILY_ADD_MEMBER,
+          '👑 Traspasar administracion',
+          CALLBACK_FAMILY_START_TRANSFER,
         ),
       ],
       [
@@ -4048,13 +4234,193 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           CALLBACK_FAMILY_START_REMOVE,
         ),
       ],
+      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
+    ]);
+  }
+
+  private formatFamilyMembersPrompt(
+    members: Array<{
+      id: string;
+      name: string;
+      phoneNumber: string;
+      telegramChatId: string | null;
+      role: UserRole;
+    }>,
+  ) {
+    const lines =
+      members.length === 0
+        ? [this.bold('No hay integrantes activos en la familia.')]
+        : members.map((member, index) => {
+            const roleLabel =
+              member.role === UserRole.FAMILY_ADMIN ? 'admin' : 'miembro';
+            const statusLabel = member.telegramChatId ? 'vinculado' : 'pendiente';
+            return `${this.bold(`${index + 1}.`)} ${this.escapeHtml(member.name)} · ${roleLabel} · ${statusLabel}`;
+          });
+
+    return [
+      this.bold('Miembros de la familia'),
+      '',
+      this.bold(
+        'Selecciona una persona para ver su detalle y estado de vinculacion.',
+      ),
+      '',
+      lines.join('\n'),
+    ].join('\n');
+  }
+
+  private buildFamilyMembersKeyboard(
+    members: Array<{ id: string; name: string; role: UserRole }>,
+  ) {
+    const rows = members.map((member, index) => [
+      Markup.button.callback(
+        `${member.role === UserRole.FAMILY_ADMIN ? '👑' : '👤'} ${index + 1}. ${this.truncateTaskTitle(member.name, 18)}`,
+        `family:member:view:${member.id}`,
+      ),
+    ]);
+
+    rows.push([
+      Markup.button.callback('⬅️ Volver', CALLBACK_FAMILY_CANCEL),
+      Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+    ]);
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private formatFamilyMemberDetail(member: {
+    name: string;
+    phoneNumber: string;
+    telegramUsername: string | null;
+    telegramChatId: string | null;
+    role: UserRole;
+    createdAt: Date;
+  }) {
+    const linked = Boolean(member.telegramChatId);
+    const linkedLabel = linked ? 'Vinculado' : 'Pendiente de vinculacion';
+    const username = member.telegramUsername
+      ? `@${member.telegramUsername}`
+      : 'Sin username';
+    const roleLabel =
+      member.role === UserRole.FAMILY_ADMIN
+        ? 'Administrador familiar'
+        : 'Miembro';
+
+    return [
+      this.bold('Detalle del miembro'),
+      `${this.bold('Nombre:')} ${this.escapeHtml(member.name)}`,
+      `${this.bold('Rol:')} ${this.escapeHtml(roleLabel)}`,
+      `${this.bold('Estado:')} ${this.escapeHtml(linkedLabel)}`,
+      `${this.bold('Telefono:')} ${this.escapeHtml(member.phoneNumber)}`,
+      `${this.bold('Telegram:')} ${this.escapeHtml(linked ? username : 'Aun no vinculado')}`,
+      `${this.bold('Alta:')} ${this.escapeHtml(
+        DateTime.fromJSDate(member.createdAt)
+          .setZone('America/Santiago')
+          .setLocale('es')
+          .toFormat('dd/LL/yyyy HH:mm'),
+      )}`,
+    ].join('\n');
+  }
+
+  private formatFamilyMemberResetPrompt(member: {
+    id: string;
+    name: string;
+    telegramChatId: string | null;
+  }) {
+    return [
+      this.bold('Resetear vinculacion Telegram'),
+      '',
+      `${this.escapeHtml(member.name)} volvera a quedar como pendiente de vinculacion.`,
+      'La persona tendra que hacer /start y compartir su contacto otra vez.',
+      '',
+      this.bold('¿Quieres continuar?'),
+    ].join('\n');
+  }
+
+  private buildFamilyMemberDetailKeyboard(member: {
+    id: string;
+    role: UserRole;
+    telegramChatId: string | null;
+  }) {
+    const rows = [
       [
         Markup.button.callback(
-          '👑 Traspasar administracion',
-          CALLBACK_FAMILY_START_TRANSFER,
+          '✏️ Editar nombre',
+          `family:member:rename:${member.id}`,
         ),
       ],
-      [Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE)],
+      ...(member.role !== UserRole.FAMILY_ADMIN && member.telegramChatId
+        ? [[
+            Markup.button.callback(
+              '🔄 Resetear vinculacion',
+              `family:member:reset_link:${member.id}`,
+            ),
+          ]]
+        : []),
+      ...(member.role !== UserRole.FAMILY_ADMIN
+        ? [[
+            Markup.button.callback(
+              '🗑️ Quitar miembro',
+              `family:member:remove:${member.id}`,
+            ),
+          ]]
+        : []),
+      [
+        Markup.button.callback(
+          '⬅️ Volver a miembros',
+          CALLBACK_FAMILY_VIEW_MEMBERS,
+        ),
+        Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+      ],
+    ];
+
+    return Markup.inlineKeyboard(rows);
+  }
+
+  private buildFamilyMemberResetConfirmKeyboard(memberUserId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✅ Confirmar reset',
+          `family:member:reset_confirm:${memberUserId}`,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '⬅️ Volver al detalle',
+          `family:member:view:${memberUserId}`,
+        ),
+        Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+      ],
+    ]);
+  }
+
+  private formatFamilyMemberRemovalPrompt(member: {
+    id: string;
+    name: string;
+  }) {
+    return [
+      this.bold('Quitar miembro'),
+      '',
+      `${this.escapeHtml(member.name)} dejara de pertenecer a la familia y perdera su vinculacion actual con el bot.`,
+      '',
+      this.bold('¿Quieres continuar?'),
+    ].join('\n');
+  }
+
+  private buildFamilyMemberRemovalConfirmKeyboard(memberUserId: string) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          '✅ Confirmar eliminacion',
+          `family:member:remove_confirm:${memberUserId}`,
+        ),
+      ],
+      [
+        Markup.button.callback(
+          '⬅️ Volver al detalle',
+          `family:member:view:${memberUserId}`,
+        ),
+        Markup.button.callback('Cerrar', CALLBACK_FAMILY_CLOSE),
+      ],
     ]);
   }
 
@@ -4896,11 +5262,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.bold('Familia'),
           '',
           this.bold('Administrador familiar:'),
-          'Puede agregar y quitar integrantes.',
+          'Puede ver miembros, invitar, editar nombres, resetear vinculaciones y quitar integrantes.',
           '',
           this.bold('Agregar un integrante:'),
           'Usa /crearusuario Nombre +56912345678',
-          'o entra a `Editar familia` y sigue el flujo guiado.',
+          'o entra a `Editar familia` para invitar con link o cargarlo manualmente.',
           '',
           this.bold('Vinculacion del integrante:'),
           'La persona debe escribir /start y compartir su contacto.',

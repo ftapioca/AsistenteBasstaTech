@@ -174,6 +174,137 @@ export class UsersService {
     });
   }
 
+  async listFamilyMembersForAdmin(adminUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede gestionar miembros.',
+      );
+    }
+
+    return this.prisma.user.findMany({
+      where: {
+        familyId: admin.familyId,
+        isActive: true,
+      },
+      orderBy: [{ role: 'desc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        name: true,
+        phoneNumber: true,
+        telegramUserId: true,
+        telegramChatId: true,
+        role: true,
+      },
+    });
+  }
+
+  async getFamilyMemberForAdmin(adminUserId: string, memberUserId: string) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede gestionar miembros.',
+      );
+    }
+
+    const member = await this.prisma.user.findUnique({
+      where: { id: memberUserId },
+      select: {
+        id: true,
+        familyId: true,
+        name: true,
+        phoneNumber: true,
+        telegramUserId: true,
+        telegramChatId: true,
+        telegramUsername: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+
+    if (!member || member.familyId !== admin.familyId || !member.isActive) {
+      throw new NotFoundException('Usuario no encontrado en tu familia.');
+    }
+
+    return member;
+  }
+
+  async renameFamilyMemberForAdmin(
+    adminUserId: string,
+    memberUserId: string,
+    name: string,
+  ) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede gestionar miembros.',
+      );
+    }
+
+    const member = await this.getFamilyMemberForAdmin(adminUserId, memberUserId);
+
+    return this.prisma.user.update({
+      where: { id: member.id },
+      data: {
+        name: name.trim(),
+      },
+      select: {
+        id: true,
+        familyId: true,
+        name: true,
+        phoneNumber: true,
+        telegramUserId: true,
+        telegramChatId: true,
+        telegramUsername: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+  }
+
+  async resetFamilyMemberTelegramForAdmin(
+    adminUserId: string,
+    memberUserId: string,
+  ) {
+    const admin = await this.requireActiveUser(adminUserId);
+    if (admin.role !== UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'Solo un administrador familiar puede gestionar miembros.',
+      );
+    }
+
+    const member = await this.getFamilyMemberForAdmin(adminUserId, memberUserId);
+
+    if (member.role === UserRole.FAMILY_ADMIN) {
+      throw new BadRequestException(
+        'No puedes resetear la vinculacion de un administrador familiar desde este flujo.',
+      );
+    }
+
+    return this.prisma.user.update({
+      where: { id: member.id },
+      data: {
+        telegramUserId: null,
+        telegramChatId: null,
+        telegramUsername: null,
+      },
+      select: {
+        id: true,
+        familyId: true,
+        name: true,
+        phoneNumber: true,
+        telegramUserId: true,
+        telegramChatId: true,
+        telegramUsername: true,
+        role: true,
+        isActive: true,
+        createdAt: true,
+      },
+    });
+  }
+
   async listTransferableAdminUsers(adminUserId: string) {
     const admin = await this.requireActiveUser(adminUserId);
     if (admin.role !== UserRole.FAMILY_ADMIN) {
