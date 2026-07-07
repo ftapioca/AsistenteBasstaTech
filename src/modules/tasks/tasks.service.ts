@@ -36,14 +36,17 @@ const taskActorInclude = {
 type TaskWithActors = Prisma.TaskGetPayload<{
   include: typeof taskActorInclude;
 }>;
+type ReminderTargetUser = Pick<
+  User,
+  'id' | 'telegramChatId' | 'isActive' | 'reminderMinutesBefore'
+>;
 type TaskWithReminderContext = Task & {
-  assignedToUser:
-    | (User & {
-        family: {
-          settings: Settings | null;
-        };
-      })
-    | null;
+  assignedToUser: ReminderTargetUser | null;
+  createdByUser: ReminderTargetUser;
+  family: {
+    settings: Settings | null;
+    users: ReminderTargetUser[];
+  };
 };
 type DailyBriefingTask = Pick<
   Task,
@@ -666,13 +669,37 @@ export class TasksService {
         },
       },
       include: {
-        assignedToUser: {
+        family: {
           include: {
-            family: {
-              include: {
-                settings: true,
+            settings: true,
+            users: {
+              where: {
+                isActive: true,
+                telegramChatId: { not: null },
+              },
+              select: {
+                id: true,
+                telegramChatId: true,
+                isActive: true,
+                reminderMinutesBefore: true,
               },
             },
+          },
+        },
+        createdByUser: {
+          select: {
+            id: true,
+            telegramChatId: true,
+            isActive: true,
+            reminderMinutesBefore: true,
+          },
+        },
+        assignedToUser: {
+          select: {
+            id: true,
+            telegramChatId: true,
+            isActive: true,
+            reminderMinutesBefore: true,
           },
         },
       },
@@ -718,11 +745,42 @@ export class TasksService {
       return task.assignedToUser.reminderMinutesBefore;
     }
 
-    if (task.assignedToUser?.family.settings?.reminderMinutesBefore != null) {
-      return task.assignedToUser.family.settings.reminderMinutesBefore;
+    if (
+      task.scope === TaskScope.PERSONAL &&
+      task.createdByUser.reminderMinutesBefore != null
+    ) {
+      return task.createdByUser.reminderMinutesBefore;
+    }
+
+    if (task.family.settings?.reminderMinutesBefore != null) {
+      return task.family.settings.reminderMinutesBefore;
     }
 
     return globalReminderMinutesBefore;
+  }
+
+  getReminderRecipientsForTask(task: TaskWithReminderContext) {
+    const candidates =
+      task.scope === TaskScope.FAMILY
+        ? task.assignedToUserId
+          ? [task.createdByUser, task.assignedToUser].filter(
+              (user): user is ReminderTargetUser => Boolean(user),
+            )
+          : task.family.users
+        : [task.assignedToUser ?? task.createdByUser].filter(
+            (user): user is ReminderTargetUser => Boolean(user),
+          );
+
+    const seenUserIds = new Set<string>();
+
+    return candidates.filter((user) => {
+      if (!user.isActive || !user.telegramChatId || seenUserIds.has(user.id)) {
+        return false;
+      }
+
+      seenUserIds.add(user.id);
+      return true;
+    });
   }
 
   async markReminderSent(taskId: string) {

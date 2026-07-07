@@ -68,14 +68,12 @@ Este documento aterriza la politica funcional en acciones concretas del bot para
 
 ### Recordatorios
 
-- El recordatorio debe llegar al `assignedToUserId`.
-- En tareas familiares sin asignar, la conducta debe definirse en la siguiente iteracion:
-  - opcion A: no enviar recordatorio automatico
-  - opcion B: enviarlo al creador
-  - opcion C: enviarlo a toda la familia
+- En tareas `PERSONAL`, el recordatorio se envia al dueño de la tarea.
+- En tareas `FAMILY` sin asignar, el recordatorio se envia a todos los integrantes activos con Telegram vinculado.
+- En tareas `FAMILY` asignadas, el recordatorio se envia al creador/asignador y a la persona asignada.
+- Si el creador y el asignado son la misma persona, el recordatorio se envia una sola vez.
 
 ## Pendientes de la siguiente iteracion
 
-- Definir el comportamiento exacto de recordatorios para tareas familiares sin asignar.
 - Definir si una reasignacion debe conservar a `createdByUserId` como creador historico o si se necesita un campo nuevo tipo `assignedByUserId`.
 - Agregar tests funcionales del flujo Telegram para `wizard`, `editar asignacion` y `ver detalle`.

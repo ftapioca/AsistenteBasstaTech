@@ -13,6 +13,9 @@ Este archivo resume los cambios relevantes del proyecto a partir del historial d
 - Se documenta el comportamiento en `README.md` y se deja trazabilidad funcional de la feature.
 - Se agrega una matriz operativa en `docs/task-assignment-matrix.md` para aterrizar permisos por accion y pantalla.
 - Se agregan tests unitarios en `TasksService` para bloquear regresiones de visibilidad, edicion, borrado y reasignacion de ownership al convertir tareas a personales.
+- Se ajustan los recordatorios familiares:
+  - tareas familiares sin asignar notifican a todos los miembros activos con Telegram vinculado
+  - tareas familiares asignadas notifican al creador y al asignado
 
 ## 2026-07-07
 

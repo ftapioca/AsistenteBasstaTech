@@ -37,10 +37,6 @@ export class RemindersService {
     let sentCount = 0;
 
     for (const task of tasks) {
-      if (!task.assignedToUser?.telegramChatId) {
-        continue;
-      }
-
       const reminderMinutesBefore =
         this.tasksService.resolveReminderMinutesBeforeForTask(
           task,
@@ -68,14 +64,27 @@ export class RemindersService {
         now,
         reminderMinutesBefore,
       );
+      const recipients = this.tasksService.getReminderRecipientsForTask(task);
 
-      await this.telegramService.sendTaskReminder(
-        task.assignedToUser.telegramChatId,
-        task.id,
-        message,
-      );
-      await this.tasksService.markReminderSent(task.id);
-      sentCount += 1;
+      if (recipients.length === 0) {
+        continue;
+      }
+
+      let sentForTask = 0;
+
+      for (const recipient of recipients) {
+        await this.telegramService.sendTaskReminder(
+          recipient.telegramChatId as string,
+          task.id,
+          message,
+        );
+        sentForTask += 1;
+      }
+
+      if (sentForTask > 0) {
+        await this.tasksService.markReminderSent(task.id);
+        sentCount += sentForTask;
+      }
     }
 
     if (sentCount > 0) {

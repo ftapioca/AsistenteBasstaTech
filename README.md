@@ -162,6 +162,8 @@ La API HTTP queda en `http://localhost:3000`:
 - El wizard de `/nueva` ahora pregunta si quieres agregar una nota despues de definir `Fecha/Hora`; si respondes que si, permite escribirla antes de pedir la prioridad
 - `/alertas` permite definir por separado la anticipacion predeterminada de recordatorios y la hora del briefing diario por usuario
 - Cada tarea puede usar una alerta propia o heredar la predeterminada del usuario
+- Los recordatorios de tareas familiares sin asignar se envian a toda la familia activa con Telegram vinculado
+- Los recordatorios de tareas familiares asignadas se envian al creador y al asignado
 - El briefing diario ahora separa `Vencidas`, `Hoy`, `Proximas` y `Sin fecha` para evitar perder visibilidad de otras tareas abiertas
 - `/ayuda` ahora muestra un resumen corto con botones contextuales por categoria: `Tareas`, `Listas`, `Edicion`, `Recordatorios`, `Familia` y `Comandos`
 - `Editar familia` ahora muestra una pantalla inicial de acciones: `Renombrar familia`, `Agregar miembro`, `Quitar miembro` y `Cerrar`
