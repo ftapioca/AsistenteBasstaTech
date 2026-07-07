@@ -39,7 +39,12 @@ export class AiService {
     const apiKey = this.configService.get<string>('OPENAI_API_KEY');
     if (apiKey) {
       this.client = new OpenAI({ apiKey });
+      return;
     }
+
+    this.logger.warn(
+      'OPENAI_API_KEY no configurado. La transcripcion de voz queda deshabilitada y el parser de texto usara fallback heuristico.',
+    );
   }
 
   async transcribeVoiceNote(input: {
@@ -49,7 +54,7 @@ export class AiService {
     language?: string;
   }): Promise<AiTranscription> {
     if (!this.client) {
-      throw new Error('OpenAI no esta configurado para transcripcion.');
+      throw new Error('OPENAI_API_KEY no configurado para transcripcion.');
     }
 
     const file = await toFile(
@@ -86,20 +91,28 @@ export class AiService {
         ),
       };
     } catch (error) {
-      const details =
-        error instanceof Error ? error.message : 'Error desconocido';
+      const details = this.formatOpenAiError(error);
       this.logger.warn(
         `Fallo transcripcion con ${preferredModel}. Reintentando con whisper-1. ${details}`,
       );
     }
 
-    const fallbackTranscription = await this.client.audio.transcriptions.create({
-      file,
-      model: 'whisper-1',
-      language: input.language ?? 'es',
-      response_format: 'json',
-      temperature: 0,
-    });
+    let fallbackTranscription;
+
+    try {
+      fallbackTranscription = await this.client.audio.transcriptions.create({
+        file,
+        model: 'whisper-1',
+        language: input.language ?? 'es',
+        response_format: 'json',
+        temperature: 0,
+      });
+    } catch (error) {
+      throw new Error(
+        `Fallo transcripcion fallback whisper-1: ${this.formatOpenAiError(error)}`,
+      );
+    }
+
     const fallbackText = fallbackTranscription.text.trim();
 
     if (!fallbackText) {
@@ -322,5 +335,24 @@ export class AiService {
       values.reduce((sum, value) => sum + value, 0) / values.length;
 
     return averageLogprob < -0.8;
+  }
+
+  private formatOpenAiError(error: unknown) {
+    if (error && typeof error === 'object') {
+      const candidate = error as { status?: unknown; message?: unknown };
+      return JSON.stringify(
+        {
+          status: candidate.status,
+          message:
+            typeof candidate.message === 'string'
+              ? candidate.message
+              : String(error),
+        },
+        null,
+        2,
+      );
+    }
+
+    return String(error);
   }
 }

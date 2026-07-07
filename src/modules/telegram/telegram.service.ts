@@ -585,6 +585,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleVoiceMessage(ctx: BotVoiceContext): Promise<BotResponse> {
     try {
+      this.logger.log(
+        `Procesando nota de voz de ${ctx.from.id}. duration=${ctx.message.voice.duration}s size=${ctx.message.voice.file_size ?? 'unknown'} mime=${ctx.message.voice.mime_type ?? 'unknown'}`,
+      );
       const audio = await this.downloadTelegramFile(ctx.message.voice.file_id);
       const transcription = await this.aiService.transcribeVoiceNote({
         audio,
@@ -608,7 +611,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Error desconocido';
-      this.logger.warn(`No se pudo procesar la nota de voz: ${message}`);
+      this.logger.warn(
+        `No se pudo procesar la nota de voz de ${ctx.from.id}: ${message}`,
+      );
       return 'No pude entender ese audio. Intenta de nuevo o escríbelo.';
     }
   }
@@ -995,14 +1000,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     const fileUrl = await this.bot.telegram.getFileLink(fileId);
+    this.logger.log(`Descargando archivo de voz desde Telegram: ${fileUrl}`);
     const response = await fetch(fileUrl);
 
     if (!response.ok) {
-      throw new Error(`No se pudo descargar el archivo de Telegram (${response.status}).`);
+      throw new Error(
+        `No se pudo descargar el archivo de Telegram (${response.status}).`,
+      );
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const buffer = Buffer.from(arrayBuffer);
+    this.logger.log(
+      `Archivo de voz descargado correctamente. bytes=${buffer.byteLength}`,
+    );
+    return buffer;
   }
 
   private async requireRegisteredUser(ctx: BotReplyContext) {
