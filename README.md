@@ -104,6 +104,7 @@ Notas:
 - `start:dev:localbot` carga `.env.local` en vez de `.env`
 - `start:dev:localbot` y `start:localbot` habilitan `ALLOW_TELEGRAM_POLLING=true` solo para el proceso local
 - `prisma:deploy:localbot` y `prisma:seed:localbot` tambien cargan `.env.local`
+- cuando usas `ENV_FILE=.env.local`, ese archivo pasa a ser la fuente de verdad y sobrescribe variables heredadas del shell, incluso si en produccion existen `RENDER_EXTERNAL_URL` o `TELEGRAM_WEBHOOK_URL`
 - si el comando `CREATE DATABASE` falla porque ya existe, puedes seguir
 - si no hay webhook configurado y `ALLOW_TELEGRAM_POLLING=false`, Telegram queda deshabilitado para evitar consumir mensajes del bot equivocado
 - el teclado inferior de Telegram y el historial de mensajes quedaran aislados en el bot de pruebas

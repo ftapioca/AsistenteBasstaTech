@@ -368,7 +368,7 @@ export class TasksService {
     });
   }
 
-  async storeTaskListContext(chatId: string, tasks: Task[]) {
+  async storeTaskListContext(chatId: string, tasks: Array<Pick<Task, 'id'>>) {
     return this.prisma.chatContext.upsert({
       where: { chatId },
       create: {

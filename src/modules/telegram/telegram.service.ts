@@ -3314,7 +3314,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     const timezone = this.usersService.resolveTimezone(user);
     const buildListResult = async (
       listType: 'today' | 'pending' | 'family' | 'completed',
-      tasks: DisplayTask[],
+      tasks: Array<DisplayTask & { id: string }>,
       allowBulkComplete: boolean,
       allowBulkDelete: boolean,
       headingOverride?: string,

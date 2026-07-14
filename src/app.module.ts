@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
+import { bootstrapEnvironment } from './config/env.bootstrap';
 import { validateEnvironment } from './config/env.validation';
 import { AiModule } from './modules/ai/ai.module';
 import { DailyBriefingModule } from './modules/daily-briefing/daily-briefing.module';
@@ -12,12 +13,16 @@ import { TasksModule } from './modules/tasks/tasks.module';
 import { TelegramModule } from './modules/telegram/telegram.module';
 import { UsersModule } from './modules/users/users.module';
 
+bootstrapEnvironment();
+
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: process.env.ENV_FILE?.trim() || '.env',
+      ignoreEnvFile: true,
       validate: validateEnvironment,
+      expandVariables: false,
+      cache: true,
     }),
     ScheduleModule.forRoot(),
     DatabaseModule,
