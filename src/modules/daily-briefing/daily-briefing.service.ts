@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { Priority, TaskScope } from '@prisma/client';
 import { DateTime } from 'luxon';
@@ -12,6 +13,7 @@ export class DailyBriefingService {
   private readonly logger = new Logger(DailyBriefingService.name);
 
   constructor(
+    private readonly configService: ConfigService,
     private readonly usersService: UsersService,
     private readonly tasksService: TasksService,
     private readonly telegramService: TelegramService,
@@ -20,6 +22,14 @@ export class DailyBriefingService {
 
   @Cron('* * * * *')
   async processDailyBriefings() {
+    const schedulerEnabled = this.configService.get<boolean | string>(
+      'SCHEDULER_ENABLED',
+      true,
+    );
+    if (schedulerEnabled === false || schedulerEnabled === 'false') {
+      return;
+    }
+
     const users = await this.usersService.getUsersEligibleForBriefing();
 
     for (const user of users) {

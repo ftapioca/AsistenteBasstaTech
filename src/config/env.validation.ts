@@ -28,6 +28,10 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  SCHEDULER_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((value) => value === 'true'),
   TELEGRAM_WEBHOOK_URL: optionalUrl,
   TELEGRAM_WEBHOOK_SECRET: optionalNonEmptyString,
   RENDER_EXTERNAL_URL: optionalUrl,

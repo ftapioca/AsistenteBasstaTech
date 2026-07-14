@@ -64,6 +64,16 @@ type DailyBriefingTask = Pick<
   Task,
   'id' | 'title' | 'scope' | 'dueDate' | 'priority' | 'description'
 >;
+export type PendingTaskListFilter =
+  | 'ALL'
+  | 'OVERDUE'
+  | 'WITHOUT_DUE_DATE'
+  | 'MINE'
+  | 'HIGH_PRIORITY';
+type PendingTaskListOptions = {
+  filter?: PendingTaskListFilter;
+  search?: string;
+};
 type PendingAction =
   | {
       type: 'CREATE_TASK_CONFIRMATION';
@@ -257,17 +267,76 @@ export class TasksService {
     });
   }
 
-  async listPendingTasks(userId: string) {
+  async listPendingTasks(userId: string, options: PendingTaskListOptions = {}) {
     const user = await this.usersService.requireActiveUser(userId);
+    const timezone = this.usersService.resolveTimezone(user);
+    const whereClauses: Prisma.TaskWhereInput[] = [
+      {
+        familyId: user.familyId,
+        status: TaskStatus.PENDING,
+      },
+      this.visibilityWhere(user),
+    ];
+
+    switch (options.filter ?? 'ALL') {
+      case 'OVERDUE':
+        whereClauses.push({
+          dueDate: {
+            lt: DateTime.now().setZone(timezone).toUTC().toJSDate(),
+          },
+        });
+        break;
+      case 'WITHOUT_DUE_DATE':
+        whereClauses.push({
+          dueDate: null,
+        });
+        break;
+      case 'MINE':
+        whereClauses.push({
+          OR: [{ assignedToUserId: user.id }, { createdByUserId: user.id }],
+        });
+        break;
+      case 'HIGH_PRIORITY':
+        whereClauses.push({
+          priority: Priority.HIGH,
+        });
+        break;
+      case 'ALL':
+        break;
+    }
+
+    const trimmedSearch = options.search?.trim();
+    if (trimmedSearch) {
+      whereClauses.push({
+        OR: [
+          {
+            title: {
+              contains: trimmedSearch,
+              mode: 'insensitive',
+            },
+          },
+          {
+            description: {
+              contains: trimmedSearch,
+              mode: 'insensitive',
+            },
+          },
+        ],
+      });
+    }
 
     return this.prisma.task.findMany({
       where: {
-        familyId: user.familyId,
-        status: TaskStatus.PENDING,
-        ...this.visibilityWhere(user),
+        AND: whereClauses,
       },
       include: taskActorInclude,
       orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    });
+  }
+
+  async searchPendingTasks(userId: string, search: string) {
+    return this.listPendingTasks(userId, {
+      search,
     });
   }
 
@@ -574,7 +643,11 @@ export class TasksService {
         where: { id: assignedToUserId },
       });
 
-      if (!assignee || !assignee.isActive || assignee.familyId !== user.familyId) {
+      if (
+        !assignee ||
+        !assignee.isActive ||
+        assignee.familyId !== user.familyId
+      ) {
         throw new BadRequestException(
           'La persona seleccionada no pertenece a tu familia.',
         );
@@ -992,7 +1065,10 @@ export class TasksService {
     }
 
     if (task.scope === TaskScope.PERSONAL) {
-      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
+      if (
+        task.createdByUserId === user.id ||
+        task.assignedToUserId === user.id
+      ) {
         return;
       }
 
@@ -1025,7 +1101,10 @@ export class TasksService {
       );
     }
 
-    if (task.scope === TaskScope.FAMILY && user.role === UserRole.FAMILY_ADMIN) {
+    if (
+      task.scope === TaskScope.FAMILY &&
+      user.role === UserRole.FAMILY_ADMIN
+    ) {
       return;
     }
 
@@ -1053,7 +1132,10 @@ export class TasksService {
     }
 
     if (task.scope === TaskScope.PERSONAL) {
-      if (task.createdByUserId === user.id || task.assignedToUserId === user.id) {
+      if (
+        task.createdByUserId === user.id ||
+        task.assignedToUserId === user.id
+      ) {
         return;
       }
 
@@ -1086,10 +1168,7 @@ export class TasksService {
       return;
     }
 
-    if (
-      task.createdByUserId !== user.id &&
-      task.assignedToUserId !== user.id
-    ) {
+    if (task.createdByUserId !== user.id && task.assignedToUserId !== user.id) {
       throw new ForbiddenException('Solo puedes ver tus tareas personales.');
     }
   }
@@ -1120,7 +1199,11 @@ export class TasksService {
       where: { id: dto.assignedToUserId },
     });
 
-    if (!assignee || !assignee.isActive || assignee.familyId !== user.familyId) {
+    if (
+      !assignee ||
+      !assignee.isActive ||
+      assignee.familyId !== user.familyId
+    ) {
       throw new BadRequestException(
         'La persona asignada no pertenece a tu familia.',
       );

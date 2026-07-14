@@ -4,6 +4,13 @@ Este archivo resume los cambios relevantes del proyecto a partir del historial d
 
 ## Unreleased
 
+- Se cierra la `Entrega 1` de mejoras de uso diario:
+  - nuevo comando `/buscar texto` sobre tareas pendientes visibles
+  - nuevo comando `/posponer N` con opciones `30m`, `2h`, `mañana` y `proxima semana`
+  - nuevos filtros en `/pendientes`: `vencidas`, `sin fecha`, `mias`, `alta`
+  - accesos rapidos desde `Ver tarea` para `Fecha`, `Alerta` y `Asignacion` en tareas familiares
+- Se actualiza la documentacion para reflejar comandos, filtros y shortcuts de la Entrega 1.
+- Se elimina `--forceExit` del script `test:e2e` tras estabilizar el cierre limpio del suite.
 - Se agrega asignacion opcional para tareas familiares en creacion y edicion.
 - Se aplica la matriz final de permisos:
   - tareas personales solo visibles y gestionables por su dueño

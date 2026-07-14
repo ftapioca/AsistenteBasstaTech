@@ -242,7 +242,10 @@ export class UsersService {
       );
     }
 
-    const member = await this.getFamilyMemberForAdmin(adminUserId, memberUserId);
+    const member = await this.getFamilyMemberForAdmin(
+      adminUserId,
+      memberUserId,
+    );
 
     return this.prisma.user.update({
       where: { id: member.id },
@@ -275,7 +278,10 @@ export class UsersService {
       );
     }
 
-    const member = await this.getFamilyMemberForAdmin(adminUserId, memberUserId);
+    const member = await this.getFamilyMemberForAdmin(
+      adminUserId,
+      memberUserId,
+    );
 
     if (member.role === UserRole.FAMILY_ADMIN) {
       throw new BadRequestException(
@@ -370,7 +376,10 @@ export class UsersService {
     return removedUsers;
   }
 
-  async transferFamilyAdministration(adminUserId: string, targetUserId: string) {
+  async transferFamilyAdministration(
+    adminUserId: string,
+    targetUserId: string,
+  ) {
     const admin = await this.requireActiveUser(adminUserId);
     if (admin.role !== UserRole.FAMILY_ADMIN) {
       throw new BadRequestException(

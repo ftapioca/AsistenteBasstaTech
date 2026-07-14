@@ -1,5 +1,6 @@
 import {
   Priority,
+  Prisma,
   TaskScope,
   TaskStatus,
   UserRole,
@@ -146,7 +147,11 @@ describe('TasksService permissions', () => {
     prisma.task.update.mockResolvedValue(updatedTask);
 
     await expect(
-      service.updateTaskTitle(familyUser.id, unassignedFamilyTask.id, 'Nuevo titulo'),
+      service.updateTaskTitle(
+        familyUser.id,
+        unassignedFamilyTask.id,
+        'Nuevo titulo',
+      ),
     ).resolves.toBe(updatedTask);
   });
 
@@ -163,7 +168,11 @@ describe('TasksService permissions', () => {
     prisma.task.findUnique.mockResolvedValue(assignedFamilyTask);
 
     await expect(
-      service.updateTaskTitle(unrelatedUser.id, assignedFamilyTask.id, 'Nuevo titulo'),
+      service.updateTaskTitle(
+        unrelatedUser.id,
+        assignedFamilyTask.id,
+        'Nuevo titulo',
+      ),
     ).rejects.toThrow('La tarea familiar esta asignada a otro usuario.');
   });
 
@@ -180,7 +189,9 @@ describe('TasksService permissions', () => {
 
     await expect(
       service.deleteTasksByIds(familyUser.id, [familyTask.id]),
-    ).rejects.toThrow('Solo un administrador familiar puede eliminar tareas familiares.');
+    ).rejects.toThrow(
+      'Solo un administrador familiar puede eliminar tareas familiares.',
+    );
   });
 
   it('asigna al actor cuando convierte una tarea a personal', async () => {
@@ -194,9 +205,9 @@ describe('TasksService permissions', () => {
 
     usersService.requireActiveUser.mockResolvedValue(actor);
     prisma.task.findUnique.mockResolvedValue(familyTask);
-    prisma.task.update.mockImplementation(async (args) => ({
+    prisma.task.update.mockImplementation((args: Prisma.TaskUpdateArgs) => ({
       ...familyTask,
-      ...args.data,
+      ...(args.data as Partial<Task>),
     }));
 
     const updatedTask = await service.updateTaskScope(
@@ -205,14 +216,14 @@ describe('TasksService permissions', () => {
       TaskScope.PERSONAL,
     );
 
-    expect(prisma.task.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          scope: TaskScope.PERSONAL,
-          assignedToUserId: actor.id,
-        }),
-      }),
-    );
+    const updateCalls = prisma.task.update.mock.calls as Array<
+      [Prisma.TaskUpdateArgs]
+    >;
+    const updateCall = updateCalls[0]?.[0];
+    expect(updateCall?.data).toMatchObject({
+      scope: TaskScope.PERSONAL,
+      assignedToUserId: actor.id,
+    });
     expect(updatedTask.assignedToUserId).toBe(actor.id);
   });
 
@@ -225,18 +236,90 @@ describe('TasksService permissions', () => {
 
     await service.listPendingTasks(admin.id);
 
-    expect(prisma.task.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
+    const findManyCalls = prisma.task.findMany.mock.calls as Array<
+      [Prisma.TaskFindManyArgs]
+    >;
+    const findManyCall = findManyCalls[0]?.[0];
+    const whereClauses = (findManyCall?.where as Prisma.TaskWhereInput)?.AND as
+      | Prisma.TaskWhereInput[]
+      | undefined;
+    expect(whereClauses).toEqual(
+      expect.arrayContaining([
+        {
           familyId: admin.familyId,
           status: TaskStatus.PENDING,
+        },
+        {
           OR: [
             { scope: TaskScope.FAMILY },
             { assignedToUserId: admin.id },
             { createdByUserId: admin.id },
           ],
-        }),
-      }),
+        },
+      ]),
+    );
+  });
+
+  it('aplica el filtro de tareas propias sobre la visibilidad base', async () => {
+    const { service, prisma, usersService } = createService();
+    const user = buildUser({ id: 'user-55', role: UserRole.USER });
+
+    usersService.requireActiveUser.mockResolvedValue(user);
+    prisma.task.findMany.mockResolvedValue([]);
+
+    await service.listPendingTasks(user.id, { filter: 'MINE' });
+
+    const findManyCalls = prisma.task.findMany.mock.calls as Array<
+      [Prisma.TaskFindManyArgs]
+    >;
+    const findManyCall = findManyCalls[0]?.[0];
+    const whereClauses = (findManyCall?.where as Prisma.TaskWhereInput)?.AND as
+      | Prisma.TaskWhereInput[]
+      | undefined;
+    expect(whereClauses).toEqual(
+      expect.arrayContaining([
+        {
+          OR: [{ assignedToUserId: user.id }, { createdByUserId: user.id }],
+        },
+      ]),
+    );
+  });
+
+  it('busca por titulo o descripcion en tareas pendientes', async () => {
+    const { service, prisma, usersService } = createService();
+    const user = buildUser({ id: 'user-77' });
+
+    usersService.requireActiveUser.mockResolvedValue(user);
+    prisma.task.findMany.mockResolvedValue([]);
+
+    await service.searchPendingTasks(user.id, 'presupuesto');
+
+    const findManyCalls = prisma.task.findMany.mock.calls as Array<
+      [Prisma.TaskFindManyArgs]
+    >;
+    const findManyCall = findManyCalls[0]?.[0];
+    const whereClauses = (findManyCall?.where as Prisma.TaskWhereInput)?.AND as
+      | Prisma.TaskWhereInput[]
+      | undefined;
+    expect(whereClauses).toEqual(
+      expect.arrayContaining([
+        {
+          OR: [
+            {
+              title: {
+                contains: 'presupuesto',
+                mode: 'insensitive',
+              },
+            },
+            {
+              description: {
+                contains: 'presupuesto',
+                mode: 'insensitive',
+              },
+            },
+          ],
+        },
+      ]),
     );
   });
 

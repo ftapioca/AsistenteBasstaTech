@@ -1,17 +1,43 @@
 import 'dotenv/config';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Priority, TaskScope, UserRole } from '@prisma/client';
 import { execSync } from 'node:child_process';
 import request from 'supertest';
 import { Telegram } from 'telegraf';
-import { AppModule } from '../src/app.module';
+import { validateEnvironment } from '../src/config/env.validation';
+import { AiModule } from '../src/modules/ai/ai.module';
+import { DatabaseModule } from '../src/modules/database/database.module';
+import { FamiliesModule } from '../src/modules/families/families.module';
+import { HealthModule } from '../src/modules/health/health.module';
 import { PrismaService } from '../src/modules/database/prisma.service';
+import { TasksModule } from '../src/modules/tasks/tasks.module';
+import { TelegramModule } from '../src/modules/telegram/telegram.module';
+import { UsersModule } from '../src/modules/users/users.module';
 
 type TelegramApiCall = {
   method: string;
   payload: Record<string, unknown>;
 };
+
+@Module({
+  imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: process.env.ENV_FILE?.trim() || '.env',
+      validate: validateEnvironment,
+    }),
+    DatabaseModule,
+    HealthModule,
+    FamiliesModule,
+    UsersModule,
+    TasksModule,
+    AiModule,
+    TelegramModule,
+  ],
+})
+class E2eAppModule {}
 
 describe('Telegram webhook flows (e2e)', () => {
   jest.setTimeout(30000);
@@ -29,10 +55,12 @@ describe('Telegram webhook flows (e2e)', () => {
     telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
     renderExternalUrl: process.env.RENDER_EXTERNAL_URL,
     openAiKey: process.env.OPENAI_API_KEY,
+    schedulerEnabled: process.env.SCHEDULER_ENABLED,
   };
   const testSchema = `e2e_${Date.now()}`;
 
   beforeAll(() => {
+    process.env.SCHEDULER_ENABLED = 'false';
     process.env.DATABASE_URL = buildTestDatabaseUrl(
       originalEnv.databaseUrl ?? '',
       testSchema,
@@ -45,7 +73,7 @@ describe('Telegram webhook flows (e2e)', () => {
 
     jest
       .spyOn(Telegram.prototype, 'callApi')
-      .mockImplementation(async function mockTelegramApiCall(
+      .mockImplementation(function mockTelegramApiCall(
         method: string,
         payload: Record<string, unknown>,
       ) {
@@ -72,33 +100,23 @@ describe('Telegram webhook flows (e2e)', () => {
           };
         }
 
-        return true as never;
+        return true;
       });
-  });
-
-  afterAll(() => {
-    jest.restoreAllMocks();
-    process.env.DATABASE_URL = originalEnv.databaseUrl;
-    process.env.TELEGRAM_BOT_TOKEN = originalEnv.telegramBotToken;
-    process.env.TELEGRAM_WEBHOOK_URL = originalEnv.telegramWebhookUrl;
-    process.env.TELEGRAM_WEBHOOK_SECRET = originalEnv.telegramWebhookSecret;
-    process.env.RENDER_EXTERNAL_URL = originalEnv.renderExternalUrl;
-    process.env.OPENAI_API_KEY = originalEnv.openAiKey;
-  });
-
-  beforeEach(async () => {
-    telegramApiCalls = [];
-    updateId = 1;
-    messageId = 1;
-
     process.env.TELEGRAM_BOT_TOKEN = 'test-bot-token';
     process.env.TELEGRAM_WEBHOOK_URL = 'https://example.test/telegram';
     process.env.TELEGRAM_WEBHOOK_SECRET = '';
     process.env.RENDER_EXTERNAL_URL = '';
     process.env.OPENAI_API_KEY = '';
+    process.env.SCHEDULER_ENABLED = 'false';
+  });
+
+  beforeAll(async () => {
+    telegramApiCalls = [];
+    updateId = 1;
+    messageId = 1;
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
+      imports: [E2eAppModule],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -107,10 +125,26 @@ describe('Telegram webhook flows (e2e)', () => {
     await resetDatabase(prisma);
   });
 
-  afterEach(async () => {
+  afterAll(async () => {
     await resetDatabase(prisma);
     await prisma.$disconnect();
     await app.close();
+
+    jest.restoreAllMocks();
+    process.env.DATABASE_URL = originalEnv.databaseUrl;
+    process.env.TELEGRAM_BOT_TOKEN = originalEnv.telegramBotToken;
+    process.env.TELEGRAM_WEBHOOK_URL = originalEnv.telegramWebhookUrl;
+    process.env.TELEGRAM_WEBHOOK_SECRET = originalEnv.telegramWebhookSecret;
+    process.env.RENDER_EXTERNAL_URL = originalEnv.renderExternalUrl;
+    process.env.OPENAI_API_KEY = originalEnv.openAiKey;
+    process.env.SCHEDULER_ENABLED = originalEnv.schedulerEnabled;
+  });
+
+  beforeEach(async () => {
+    telegramApiCalls = [];
+    updateId = 1;
+    messageId = 1;
+    await resetDatabase(prisma);
   });
 
   it('/health responde ok', async () => {
@@ -175,7 +209,7 @@ describe('Telegram webhook flows (e2e)', () => {
       chatId: Number(user.telegramChatId),
       telegramUserId: Number(user.telegramUserId),
     });
-    expect(lastSentText()).toContain('Listo. Agregue');
+    expect(lastSentText()).toContain('Agregue "Comprar pan"');
 
     const createdTask = await prisma.task.findFirst({
       where: {
@@ -242,6 +276,225 @@ describe('Telegram webhook flows (e2e)', () => {
       where: { id: task.id },
     });
     expect(updatedTask.scope).toBe(TaskScope.FAMILY);
+  });
+
+  it('permite buscar tareas pendientes por texto', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '1010',
+      telegramChatId: '2010',
+    });
+
+    await prisma.task.createMany({
+      data: [
+        {
+          familyId: user.familyId,
+          createdByUserId: user.id,
+          assignedToUserId: user.id,
+          title: 'Revisar presupuesto julio',
+          scope: TaskScope.PERSONAL,
+          priority: Priority.MEDIUM,
+        },
+        {
+          familyId: user.familyId,
+          createdByUserId: user.id,
+          assignedToUserId: user.id,
+          title: 'Comprar pan',
+          scope: TaskScope.PERSONAL,
+          priority: Priority.MEDIUM,
+        },
+      ],
+    });
+
+    await sendMessageUpdate('/buscar presupuesto', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastSentText()).toContain('Resultados para "presupuesto"');
+    expect(lastSentText()).toContain('Revisar presupuesto julio');
+    expect(lastSentText()).not.toContain('Comprar pan');
+  });
+
+  it('permite filtrar pendientes sin fecha', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '1011',
+      telegramChatId: '2011',
+    });
+
+    await prisma.task.createMany({
+      data: [
+        {
+          familyId: user.familyId,
+          createdByUserId: user.id,
+          assignedToUserId: user.id,
+          title: 'Tarea sin fecha',
+          scope: TaskScope.PERSONAL,
+          priority: Priority.MEDIUM,
+        },
+        {
+          familyId: user.familyId,
+          createdByUserId: user.id,
+          assignedToUserId: user.id,
+          title: 'Tarea con fecha',
+          scope: TaskScope.PERSONAL,
+          priority: Priority.MEDIUM,
+          dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      ],
+    });
+
+    await sendMessageUpdate('/pendientes sin fecha', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastSentText()).toContain('pendientes sin fecha');
+    expect(lastSentText()).toContain('Tarea sin fecha');
+    expect(lastSentText()).not.toContain('Tarea con fecha');
+  });
+
+  it('permite posponer una tarea desde la ultima lista usando /posponer', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '1012',
+      telegramChatId: '2012',
+    });
+    const task = await prisma.task.create({
+      data: {
+        familyId: user.familyId,
+        createdByUserId: user.id,
+        assignedToUserId: user.id,
+        title: 'Llamar al doctor',
+        scope: TaskScope.PERSONAL,
+        priority: Priority.MEDIUM,
+      },
+    });
+
+    await sendMessageUpdate('/pendientes', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    await sendMessageUpdate('/posponer 1 mañana', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastSentText()).toContain('Pospuse la tarea');
+    expect(lastSentText()).toContain('Llamar al doctor');
+
+    const updatedTask = await prisma.task.findUnique({
+      where: { id: task.id },
+    });
+    expect(updatedTask?.dueDate).not.toBeNull();
+  });
+
+  it('permite abrir el cambio rapido de fecha desde ver tarea', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '1013',
+      telegramChatId: '2013',
+    });
+    const task = await prisma.task.create({
+      data: {
+        familyId: user.familyId,
+        createdByUserId: user.id,
+        assignedToUserId: user.id,
+        title: 'Preparar reunion',
+        scope: TaskScope.PERSONAL,
+        priority: Priority.MEDIUM,
+      },
+    });
+
+    await sendMessageUpdate('/pendientes', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    await sendCallbackUpdate('view:start', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    await sendCallbackUpdate('view:select:1', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    await sendCallbackUpdate(`edit:field:due:${task.id}`, {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    expect(lastEditedText()).toContain(
+      'Editar fecha/hora de "Preparar reunion"',
+    );
+
+    await sendCallbackUpdate(`edit:due:quick:${task.id}:plus30m`, {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    expect(lastEditedText()).toContain('Editar tarea');
+
+    const updatedTask = await prisma.task.findUnique({
+      where: { id: task.id },
+    });
+    expect(updatedTask?.dueDate).not.toBeNull();
+  });
+
+  it('permite abrir la reasignacion desde ver tarea en tareas familiares', async () => {
+    const admin = await createLinkedUser(prisma, {
+      telegramUserId: '1014',
+      telegramChatId: '2014',
+    });
+    const member = await prisma.user.create({
+      data: {
+        familyId: admin.familyId,
+        name: 'Ana',
+        phoneNumber: '56991014000',
+        telegramUserId: '3014',
+        telegramChatId: '4014',
+        telegramUsername: 'ana',
+        role: UserRole.USER,
+        timezone: 'America/Santiago',
+      },
+    });
+    const task = await prisma.task.create({
+      data: {
+        familyId: admin.familyId,
+        createdByUserId: admin.id,
+        assignedToUserId: null,
+        title: 'Comprar utiles',
+        scope: TaskScope.FAMILY,
+        priority: Priority.MEDIUM,
+      },
+    });
+
+    await sendMessageUpdate('/familiares', {
+      chatId: Number(admin.telegramChatId),
+      telegramUserId: Number(admin.telegramUserId),
+    });
+    await sendCallbackUpdate('view:start', {
+      chatId: Number(admin.telegramChatId),
+      telegramUserId: Number(admin.telegramUserId),
+    });
+    await sendCallbackUpdate('view:select:1', {
+      chatId: Number(admin.telegramChatId),
+      telegramUserId: Number(admin.telegramUserId),
+    });
+
+    await sendCallbackUpdate(`edit:field:assignee:${task.id}`, {
+      chatId: Number(admin.telegramChatId),
+      telegramUserId: Number(admin.telegramUserId),
+    });
+    expect(lastEditedText()).toContain('Editar asignacion de "Comprar utiles"');
+
+    const anaCallback = findLastInlineCallbackByText('Ana');
+    expect(anaCallback).toBeTruthy();
+
+    await sendCallbackUpdate(anaCallback as string, {
+      chatId: Number(admin.telegramChatId),
+      telegramUserId: Number(admin.telegramUserId),
+    });
+
+    const updatedTask = await prisma.task.findUnique({
+      where: { id: task.id },
+    });
+    expect(updatedTask?.assignedToUserId).toBe(member.id);
   });
 
   it('permite ver una tarea y confirmar su completado', async () => {
@@ -400,7 +653,9 @@ describe('Telegram webhook flows (e2e)', () => {
       .expect(200);
 
     expect(lastSentText()).toContain('No encontre una cuenta existente');
-    expect(lastSentText()).toContain('Escribe el nombre que quieres para tu familia');
+    expect(lastSentText()).toContain(
+      'Escribe el nombre que quieres para tu familia',
+    );
     expect(lastSentPayload().parse_mode).toBe('HTML');
 
     await sendMessageUpdate('Bassta Family DEV', {
@@ -589,7 +844,7 @@ describe('Telegram webhook flows (e2e)', () => {
     const sentMessages = telegramApiCalls.filter(
       (call) => call.method === 'sendMessage',
     );
-    return String(sentMessages.at(-1)?.payload.text ?? '');
+    return readPayloadText(sentMessages.at(-1)?.payload.text);
   }
 
   function lastSentPayload() {
@@ -602,14 +857,41 @@ describe('Telegram webhook flows (e2e)', () => {
   function allSentTexts() {
     return telegramApiCalls
       .filter((call) => call.method === 'sendMessage')
-      .map((call) => String(call.payload.text ?? ''));
+      .map((call) => readPayloadText(call.payload.text));
   }
 
   function lastEditedText() {
     const editedMessages = telegramApiCalls.filter(
       (call) => call.method === 'editMessageText',
     );
-    return String(editedMessages.at(-1)?.payload.text ?? '');
+    return readPayloadText(editedMessages.at(-1)?.payload.text);
+  }
+
+  function findLastInlineCallbackByText(label: string) {
+    const editedMessages = telegramApiCalls.filter(
+      (call) => call.method === 'editMessageText',
+    );
+    const markup = editedMessages.at(-1)?.payload.reply_markup as
+      | {
+          inline_keyboard?: Array<
+            Array<{ text?: unknown; callback_data?: unknown }>
+          >;
+        }
+      | undefined;
+
+    for (const row of markup?.inline_keyboard ?? []) {
+      for (const button of row) {
+        if (
+          typeof button.text === 'string' &&
+          button.text.includes(label) &&
+          typeof button.callback_data === 'string'
+        ) {
+          return button.callback_data;
+        }
+      }
+    }
+
+    return null;
   }
 });
 
@@ -655,4 +937,8 @@ function buildTestDatabaseUrl(databaseUrl: string, schema: string) {
   const url = new URL(sanitized);
   url.searchParams.set('schema', schema);
   return url.toString();
+}
+
+function readPayloadText(value: unknown) {
+  return typeof value === 'string' ? value : '';
 }

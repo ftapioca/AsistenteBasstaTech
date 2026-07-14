@@ -64,6 +64,7 @@ Variables clave:
 - `DAILY_BRIEFING_GRACE_MINUTES`
 - `REMINDER_MINUTES_BEFORE`
 - `REMINDER_OVERDUE_GRACE_MINUTES`
+- `SCHEDULER_ENABLED` default: `true`. En tests e2e se usa `false` para aislar automatizaciones
 
 Si `OPENAI_API_KEY` no existe, el bot usa un parser heuristico minimo para crear tareas.
 
@@ -130,9 +131,15 @@ La API HTTP queda en `http://localhost:3000`:
 - `/crearusuario Nombre +56912345678`
 - `/hoy`
 - `/pendientes`
+- `/pendientes vencidas`
+- `/pendientes sin fecha`
+- `/pendientes mias`
+- `/pendientes alta`
+- `/buscar presupuesto`
 - `/familiares`
 - `/completadas`
 - `/ver 2`
+- `/posponer 2 mañana`
 - `/nota 2`
 - `/alertas`
 - `/editar`
@@ -151,8 +158,11 @@ La API HTTP queda en `http://localhost:3000`:
 - Las notas aceptan hasta `1500` caracteres
 - Las tareas familiares pueden quedar `sin asignar` o asignadas a un integrante
 - La lista de pendientes muestra acciones contextuales para `Ver tarea`, `Completar varias` y `Eliminar varias`
-- `Ver tarea` abre una seleccion inline de tareas, muestra el detalle y desde ahi permite `Marcar como completada` o `Editar`
+- `Ver tarea` abre una seleccion inline de tareas, muestra el detalle y desde ahi permite `Marcar como completada`, `Fecha`, `Alerta`, `Asignacion` en tareas familiares y `Editar completo`
 - Al marcar una tarea como completada desde `Ver tarea`, el bot pide confirmacion antes de cerrar la accion
+- `/pendientes` ahora acepta filtros rapidos: `vencidas`, `sin fecha`, `mias` y `alta`
+- `/buscar texto` busca coincidencias en titulo y nota dentro de tareas pendientes visibles
+- `/posponer N` permite mover una tarea de la ultima lista usando `30m`, `2h`, `mañana` o `proxima semana`
 - Si envias solo `/editar`, el bot abre una seleccion guiada de tareas pendientes
 - La edicion de tareas ahora usa una navegacion inline de `2 niveles`: primero eliges area (`Contenido` o `Programacion`) y luego la accion concreta
 - En `Contenido`, la edicion permite cambiar `Titulo`, `Tipo` (`Personal` o `Familiar`) y `Nota`
@@ -220,12 +230,11 @@ Prioridad actual de trabajo:
 
 Orden de implementacion recomendado:
 
-1. tests funcionales de `edicion`, `wizard` y `ver tarea`
-2. subtareas
-3. recurrencia
-4. configuracion familiar avanzada
-5. UX/comandos de configuracion familiar
-6. tests de automatizaciones y configuracion
+1. subtareas
+2. recurrencia
+3. configuracion familiar avanzada
+4. UX/comandos de configuracion familiar
+5. tests de automatizaciones y configuracion
 
 ### Ejemplos de lenguaje natural
 

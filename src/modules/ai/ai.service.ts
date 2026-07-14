@@ -68,8 +68,9 @@ export class AiService {
       'gpt-4o-mini-transcribe',
       'gpt-4o-transcribe',
       'whisper-1',
-    ].filter((model, index, list): model is string =>
-      Boolean(model) && list.indexOf(model) === index,
+    ].filter(
+      (model, index, list): model is string =>
+        Boolean(model) && list.indexOf(model) === index,
     );
 
     let lastError: string | null = null;
@@ -285,9 +286,7 @@ export class AiService {
     };
   }
 
-  private isLowConfidenceTranscription(
-    logprobs?: Array<{ logprob?: number }>,
-  ) {
+  private isLowConfidenceTranscription(logprobs?: Array<{ logprob?: number }>) {
     if (!logprobs || logprobs.length === 0) {
       return false;
     }
@@ -315,7 +314,7 @@ export class AiService {
           message:
             typeof candidate.message === 'string'
               ? candidate.message
-              : String(error),
+              : JSON.stringify(candidate.message ?? null),
         },
         null,
         2,
@@ -350,13 +349,16 @@ export class AiService {
       form.append('language', input.language.trim());
     }
 
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
+    const response = await fetch(
+      'https://api.openai.com/v1/audio/transcriptions',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: form,
       },
-      body: form,
-    });
+    );
 
     const bodyText = await response.text();
 

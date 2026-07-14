@@ -17,6 +17,14 @@ export class RemindersService {
 
   @Cron('* * * * *')
   async processReminders() {
+    const schedulerEnabled = this.configService.get<boolean | string>(
+      'SCHEDULER_ENABLED',
+      true,
+    );
+    if (schedulerEnabled === false || schedulerEnabled === 'false') {
+      return;
+    }
+
     const globalReminderMinutesBefore = this.configService.get<number>(
       'REMINDER_MINUTES_BEFORE',
       30,

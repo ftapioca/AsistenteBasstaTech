@@ -16,6 +16,7 @@ import { validateDto } from '../../common/dto.utils';
 import { AiService } from '../ai/ai.service';
 import { CreateTaskDto } from '../tasks/dto/create-task.dto';
 import { TasksService } from '../tasks/tasks.service';
+import { PendingTaskListFilter } from '../tasks/tasks.service';
 import { CreateUserDto } from '../users/dto/create-user.dto';
 import { UsersService } from '../users/users.service';
 
@@ -321,6 +322,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.safeReply(typedCtx, this.handleViewTask(typedCtx));
     });
 
+    this.bot.command('buscar', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.handleSearchTasks(typedCtx));
+    });
+
     this.bot.command('nota', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       await this.safeReply(typedCtx, this.handleTaskNote(typedCtx));
@@ -339,6 +345,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     this.bot.command('eliminar', async (ctx) => {
       const typedCtx = ctx as unknown as BotTextContext;
       await this.safeReply(typedCtx, this.handleDelete(typedCtx));
+    });
+
+    this.bot.command('posponer', async (ctx) => {
+      const typedCtx = ctx as unknown as BotTextContext;
+      await this.safeReply(typedCtx, this.handlePostpone(typedCtx));
     });
 
     this.bot.on(message('contact'), async (ctx) => {
@@ -519,7 +530,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.bold('Comparte tu numero usando el boton de contacto.'),
       ].join('\n'),
       this.withHtml(
-        Markup.keyboard([[Markup.button.contactRequest('Compartir mi contacto')]])
+        Markup.keyboard([
+          [Markup.button.contactRequest('Compartir mi contacto')],
+        ])
           .oneTime()
           .resize(),
       ),
@@ -682,7 +695,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
 
   private async handleListPending(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
-    const tasks = await this.tasksService.listPendingTasks(user.id);
+    const raw = ctx.message.text.replace('/pendientes', '').trim();
+    const parsedFilter = this.parsePendingFilter(raw);
+    const tasks = await this.tasksService.listPendingTasks(user.id, {
+      filter: parsedFilter?.filter ?? 'ALL',
+    });
     await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
     return this.buildTaskListResponse(
       'pending',
@@ -690,6 +707,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       true,
       true,
       this.usersService.resolveTimezone(user),
+      parsedFilter?.heading,
     );
   }
 
@@ -751,6 +769,57 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return `Elimine "${task.title}" de tu lista.`;
   }
 
+  private async handlePostpone(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    const match = ctx.message.text
+      .replace('/posponer', '')
+      .trim()
+      .match(/^(\d+)(?:\s+(.+))?$/);
+
+    if (!match?.[1] || !match[2]?.trim()) {
+      throw new BadRequestException(
+        'Usa /posponer N cuando|opcion. Ejemplo: /posponer 2 mañana, /posponer 2 30m o /posponer 2 proxima semana',
+      );
+    }
+
+    const index = Number(match[1]);
+    if (!Number.isInteger(index) || index <= 0) {
+      throw new BadRequestException(
+        'Usa /posponer N cuando|opcion. Ejemplo: /posponer 2 mañana',
+      );
+    }
+
+    const task = await this.tasksService.getEditableTaskByIndex(
+      user.id,
+      String(ctx.chat.id),
+      index,
+    );
+    const option = this.parsePostponeOption(match[2]);
+    const dueDate = this.resolveQuickDueDateOption(
+      option,
+      task,
+      this.usersService.resolveTimezone(user),
+    );
+    const updatedTask = await this.tasksService.updateTaskDueDate(
+      user.id,
+      task.id,
+      dueDate,
+    );
+
+    return {
+      text: [
+        this.bold('Listo. Pospuse la tarea.'),
+        '',
+        this.formatTaskDetail(
+          updatedTask,
+          this.usersService.resolveTimezone(user),
+          this.usersService.resolveReminderMinutesBefore(user),
+        ),
+      ].join('\n'),
+      extra: this.withHtml(this.buildViewTaskDetailKeyboard(updatedTask)),
+    };
+  }
+
   private async handleEdit(ctx: BotTextContext) {
     const user = await this.requireRegisteredUser(ctx);
     const raw = ctx.message.text.replace('/editar', '').trim();
@@ -810,8 +879,29 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         this.usersService.resolveTimezone(user),
         this.usersService.resolveReminderMinutesBefore(user),
       ),
-      extra: this.withHtml(),
+      extra: this.withHtml(this.buildViewTaskDetailKeyboard(task)),
     };
+  }
+
+  private async handleSearchTasks(ctx: BotTextContext) {
+    const user = await this.requireRegisteredUser(ctx);
+    const query = ctx.message.text.replace('/buscar', '').trim();
+    if (!query) {
+      throw new BadRequestException(
+        'Usa /buscar texto. Ejemplo: /buscar cuentas o /buscar presupuesto',
+      );
+    }
+
+    const tasks = await this.tasksService.searchPendingTasks(user.id, query);
+    await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+    return this.buildTaskListResponse(
+      'pending',
+      tasks,
+      true,
+      true,
+      this.usersService.resolveTimezone(user),
+      `Resultados para "${query}"`,
+    );
   }
 
   private async handleTaskNote(ctx: BotTextContext) {
@@ -934,9 +1024,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return renameFamilyReply;
     }
 
-    const renameFamilyMemberReply = await this.tryHandleRenameFamilyMemberText(
-      ctx,
-    );
+    const renameFamilyMemberReply =
+      await this.tryHandleRenameFamilyMemberText(ctx);
     if (renameFamilyMemberReply) {
       return renameFamilyMemberReply;
     }
@@ -1082,8 +1171,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       'DEFAULT_TIMEZONE',
       'America/Santiago',
     ),
+    headingOverride?: string,
   ): BotResponse {
-    const text = this.formatTaskList(listType, tasks, timezone);
+    const text = this.formatTaskList(
+      listType,
+      tasks,
+      timezone,
+      headingOverride,
+    );
     const keyboard = this.buildTaskListKeyboard(
       tasks,
       allowBulkComplete,
@@ -1164,6 +1259,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       'DEFAULT_TIMEZONE',
       'America/Santiago',
     ),
+    headingOverride?: string,
   ) {
     const headings: Record<typeof listType, string> = {
       today: 'Esto tienes para hoy',
@@ -1171,9 +1267,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       family: 'Estas son las tareas familiares pendientes',
       completed: 'Estas son las tareas completadas',
     };
+    const heading = headingOverride ?? headings[listType];
 
     if (tasks.length === 0) {
-      return `${headings[listType]}\n\nNo hay nada por aqui.`;
+      return `${heading}\n\nNo hay nada por aqui.`;
     }
 
     if (listType === 'today' || listType === 'completed') {
@@ -1181,7 +1278,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         (task, index) =>
           `${this.bold(`${index + 1}.`)} ${this.formatTaskLine(task, timezone, false)}`,
       );
-      return `${this.bold(headings[listType])}\n\n${lines.join('\n')}`;
+      return `${this.bold(heading)}\n\n${lines.join('\n')}`;
     }
 
     const now = DateTime.now().setZone(timezone);
@@ -1211,7 +1308,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       others.push(lineForOtherDate);
     });
 
-    const sections = [this.bold(headings[listType])];
+    const sections = [this.bold(heading)];
     if (overdue.length > 0) {
       sections.push(
         `${this.bold('🚨 Tareas vencidas')}\n${overdue.join('\n')}`,
@@ -1241,7 +1338,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
       this.logger.warn(message);
       const extra = await this.getDefaultReplyMarkup(ctx);
-      await ctx.reply(message, this.resolveReplyExtra(message, undefined, extra));
+      await ctx.reply(
+        message,
+        this.resolveReplyExtra(message, undefined, extra),
+      );
     }
   }
 
@@ -1253,7 +1353,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return reply;
   }
 
-  private prependVoiceTranscript(reply: BotResponse, transcript: string): BotResponse {
+  private prependVoiceTranscript(
+    reply: BotResponse,
+    transcript: string,
+  ): BotResponse {
     if (typeof reply === 'string') {
       return `Escuche: "${transcript}"\n\n${reply}`;
     }
@@ -1374,11 +1477,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         telegramUsername: pendingAction.telegramUsername,
       });
 
-      await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
+      await ctx.reply(
+        'Cuenta vinculada correctamente.',
+        Markup.removeKeyboard(),
+      );
       return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
     }
 
-    const confirmedUserId = userId ?? (await this.requireRegisteredUser(ctx)).id;
+    const confirmedUserId =
+      userId ?? (await this.requireRegisteredUser(ctx)).id;
     const task = await this.tasksService.createTaskForUser(
       confirmedUserId,
       pendingAction.dto,
@@ -1470,7 +1577,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         linkInput,
       );
       await this.tasksService.clearPendingAction(String(ctx.chat.id));
-      await ctx.reply('Cuenta vinculada correctamente.', Markup.removeKeyboard());
+      await ctx.reply(
+        'Cuenta vinculada correctamente.',
+        Markup.removeKeyboard(),
+      );
       return `Bienvenido ${user.name}. Quedaste vinculado a la familia ${user.family.name}.`;
     }
 
@@ -1833,7 +1943,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       default:
         if (data.startsWith('wizard:assignee:set:')) {
           const assigneeToken = data.replace('wizard:assignee:set:', '');
-          return this.handleWizardInput(ctx, user.id, `ASSIGNEE:${assigneeToken}`);
+          return this.handleWizardInput(
+            ctx,
+            user.id,
+            `ASSIGNEE:${assigneeToken}`,
+          );
         }
         return null;
     }
@@ -2029,7 +2143,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const members = await this.usersService.listFamilyUsers(user.id);
       return {
         answerText: 'Editar asignacion',
-        editText: await this.formatTaskAssigneeMenu(user.id, task),
+        editText: this.formatTaskAssigneeMenu(task),
         editExtra: this.withHtml(
           this.buildTaskAssigneeKeyboard(
             task.id,
@@ -2172,9 +2286,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const [, , , taskId, value] = data.split(':');
       const members = await this.usersService.listFamilyUsers(user.id);
       const assignedToUserId =
-        value === 'u'
-          ? null
-          : members[Number(value)]?.id ?? null;
+        value === 'u' ? null : (members[Number(value)]?.id ?? null);
 
       if (value !== 'u' && assignedToUserId == null) {
         throw new BadRequestException(
@@ -2293,7 +2405,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.usersService.resolveTimezone(user),
           this.usersService.resolveReminderMinutesBefore(user),
         ),
-        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task)),
       };
     }
 
@@ -2312,7 +2424,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.usersService.resolveTimezone(user),
           this.usersService.resolveReminderMinutesBefore(user),
         ),
-        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task)),
       };
     }
 
@@ -2348,7 +2460,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           this.usersService.resolveTimezone(user),
           this.usersService.resolveReminderMinutesBefore(user),
         ),
-        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task.id)),
+        editExtra: this.withHtml(this.buildViewTaskDetailKeyboard(task)),
       };
     }
 
@@ -2417,7 +2529,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (data === CALLBACK_FAMILY_VIEW_MEMBERS) {
-      const members = await this.usersService.listFamilyMembersForAdmin(user.id);
+      const members = await this.usersService.listFamilyMembersForAdmin(
+        user.id,
+      );
       return {
         answerText: 'Miembros',
         editText: this.formatFamilyMembersPrompt(members),
@@ -2425,7 +2539,10 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       };
     }
 
-    if (data === CALLBACK_FAMILY_INVITE_MEMBER || data === 'family:add_member') {
+    if (
+      data === CALLBACK_FAMILY_INVITE_MEMBER ||
+      data === 'family:add_member'
+    ) {
       const inviteLink = await this.buildFamilyInviteLink(user.familyId);
       return {
         answerText: 'Link de invitacion',
@@ -2537,7 +2654,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         user.id,
         memberUserId,
       );
-      const members = await this.usersService.listFamilyMembersForAdmin(user.id);
+      const members = await this.usersService.listFamilyMembersForAdmin(
+        user.id,
+      );
 
       return {
         answerText: 'Integrante quitado',
@@ -3571,7 +3690,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
             assignedToUserId:
               pendingAction.draft.scope === TaskScope.PERSONAL
                 ? userId
-                : pendingAction.draft.assignedToUserId ?? null,
+                : (pendingAction.draft.assignedToUserId ?? null),
           }),
           pendingAction.draft.dueDateInput ?? '',
         );
@@ -3797,15 +3916,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return Markup.inlineKeyboard(rows);
   }
 
-  private async formatTaskAssigneeMenu(
-    userId: string,
-    task: DisplayTask & { id?: string },
-  ) {
+  private formatTaskAssigneeMenu(task: DisplayTask & { id?: string }) {
     return [
       this.bold(`Editar asignacion de "${task.title}"`),
       `${this.bold('Valor actual:')} ${this.escapeHtml(this.formatAssigneeLabel(task))}`,
       '',
-      this.bold('Selecciona a una persona de tu familia o deja la tarea sin asignar.'),
+      this.bold(
+        'Selecciona a una persona de tu familia o deja la tarea sin asignar.',
+      ),
     ].join('\n');
   }
 
@@ -3879,10 +3997,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         },
   ) {
     if (task.scope === TaskScope.PERSONAL) {
-      return task.assignedToUser?.name ?? task.assignedToUserName ?? 'Tarea personal';
+      return (
+        task.assignedToUser?.name ?? task.assignedToUserName ?? 'Tarea personal'
+      );
     }
 
-    return task.assignedToUser?.name ?? task.assignedToUserName ?? 'Sin asignar';
+    return (
+      task.assignedToUser?.name ?? task.assignedToUserName ?? 'Sin asignar'
+    );
   }
 
   private formatTaskLine(
@@ -4020,6 +4142,19 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       return tomorrow.toUTC().toISO();
     }
 
+    if (option === 'nextweek') {
+      const taskDue = task.dueDate
+        ? DateTime.fromJSDate(task.dueDate).setZone(timezone)
+        : null;
+      const nextWeek = now.plus({ days: 7 }).set({
+        hour: taskDue?.hour ?? 9,
+        minute: taskDue?.minute ?? 0,
+        second: 0,
+        millisecond: 0,
+      });
+      return nextWeek.toUTC().toISO();
+    }
+
     throw new BadRequestException('Opcion de fecha rapida no valida.');
   }
 
@@ -4047,6 +4182,94 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     return index;
+  }
+
+  private parsePendingFilter(
+    raw: string,
+  ): { filter: PendingTaskListFilter; heading: string } | null {
+    if (!raw) {
+      return null;
+    }
+
+    const normalized = this.normalizeSearchText(raw);
+
+    if (normalized === 'vencidas' || normalized === 'vencidos') {
+      return {
+        filter: 'OVERDUE',
+        heading: 'Estas son tus tareas pendientes vencidas',
+      };
+    }
+
+    if (normalized === 'sin fecha') {
+      return {
+        filter: 'WITHOUT_DUE_DATE',
+        heading: 'Estas son tus tareas pendientes sin fecha',
+      };
+    }
+
+    if (
+      normalized === 'mias' ||
+      normalized === 'mia' ||
+      normalized === 'mio' ||
+      normalized === 'mios' ||
+      normalized === 'mis'
+    ) {
+      return {
+        filter: 'MINE',
+        heading: 'Estas son tus tareas pendientes propias',
+      };
+    }
+
+    if (
+      normalized === 'alta' ||
+      normalized === 'altas' ||
+      normalized === 'prioridad alta'
+    ) {
+      return {
+        filter: 'HIGH_PRIORITY',
+        heading: 'Estas son tus tareas pendientes de prioridad alta',
+      };
+    }
+
+    throw new BadRequestException(
+      'Usa /pendientes, /pendientes vencidas, /pendientes sin fecha, /pendientes mias o /pendientes alta.',
+    );
+  }
+
+  private parsePostponeOption(raw: string) {
+    const normalized = this.normalizeSearchText(raw);
+
+    if (
+      normalized === '30m' ||
+      normalized === '30 min' ||
+      normalized === '+30 min'
+    ) {
+      return 'plus30m';
+    }
+
+    if (
+      normalized === '2h' ||
+      normalized === '2 horas' ||
+      normalized === '+2 horas'
+    ) {
+      return 'plus2h';
+    }
+
+    if (normalized === 'manana') {
+      return 'tomorrow';
+    }
+
+    if (
+      normalized === 'proxima semana' ||
+      normalized === 'la proxima semana' ||
+      normalized === 'semana proxima'
+    ) {
+      return 'nextweek';
+    }
+
+    throw new BadRequestException(
+      'Opcion no valida. Usa 30m, 2h, mañana o proxima semana.',
+    );
   }
 
   private formatTaskDetail(
@@ -4272,7 +4495,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         : members.map((member, index) => {
             const roleLabel =
               member.role === UserRole.FAMILY_ADMIN ? 'admin' : 'miembro';
-            const statusLabel = member.telegramChatId ? 'vinculado' : 'pendiente';
+            const statusLabel = member.telegramChatId
+              ? 'vinculado'
+              : 'pendiente';
             return `${this.bold(`${index + 1}.`)} ${this.escapeHtml(member.name)} · ${roleLabel} · ${statusLabel}`;
           });
 
@@ -4367,20 +4592,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         ),
       ],
       ...(member.role !== UserRole.FAMILY_ADMIN && member.telegramChatId
-        ? [[
-            Markup.button.callback(
-              '🔄 Resetear vinculacion',
-              `family:member:reset_link:${member.id}`,
-            ),
-          ]]
+        ? [
+            [
+              Markup.button.callback(
+                '🔄 Resetear vinculacion',
+                `family:member:reset_link:${member.id}`,
+              ),
+            ],
+          ]
         : []),
       ...(member.role !== UserRole.FAMILY_ADMIN
-        ? [[
-            Markup.button.callback(
-              '🗑️ Quitar miembro',
-              `family:member:remove:${member.id}`,
-            ),
-          ]]
+        ? [
+            [
+              Markup.button.callback(
+                '🗑️ Quitar miembro',
+                `family:member:remove:${member.id}`,
+              ),
+            ],
+          ]
         : []),
       [
         Markup.button.callback(
@@ -4443,7 +4672,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  private formatFamilyTransferPrompt(members: Array<{ id: string; name: string }>) {
+  private formatFamilyTransferPrompt(
+    members: Array<{ id: string; name: string }>,
+  ) {
     if (members.length === 0) {
       return this.bold(
         'No hay integrantes vinculados al bot disponibles para recibir la administracion.',
@@ -4815,12 +5046,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
               ),
             ],
             ...(task.scope === TaskScope.FAMILY
-              ? [[
-                  Markup.button.callback(
-                    '👥 Asignacion',
-                    `edit:field:assignee:${task.id}`,
-                  ),
-                ]]
+              ? [
+                  [
+                    Markup.button.callback(
+                      '👥 Asignacion',
+                      `edit:field:assignee:${task.id}`,
+                    ),
+                  ],
+                ]
               : []),
             [
               Markup.button.callback(
@@ -4885,20 +5118,42 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  private buildViewTaskDetailKeyboard(taskId: string) {
-    return Markup.inlineKeyboard([
+  private buildViewTaskDetailKeyboard(
+    task: DisplayTask & {
+      id: string;
+      assignedToUserId?: string | null;
+      scope?: TaskScope;
+    },
+  ) {
+    const rows = [
       [
         Markup.button.callback(
           '✅ Marcar como completada',
-          `view:complete:ask:${taskId}`,
+          `view:complete:ask:${task.id}`,
         ),
       ],
-      [Markup.button.callback('✏️ Editar', `view:edit:${taskId}`)],
       [
-        Markup.button.callback('⬅️ Volver', 'view:back:list'),
-        Markup.button.callback('Cerrar', `view:close:${taskId}`),
+        Markup.button.callback('🗓️ Fecha', `edit:field:due:${task.id}`),
+        Markup.button.callback('🔔 Alerta', `edit:field:reminder:${task.id}`),
       ],
+      [Markup.button.callback('✏️ Editar completo', `view:edit:${task.id}`)],
+    ];
+
+    if (task.scope === TaskScope.FAMILY) {
+      rows.splice(2, 0, [
+        Markup.button.callback(
+          '👥 Asignacion',
+          `edit:field:assignee:${task.id}`,
+        ),
+      ]);
+    }
+
+    rows.push([
+      Markup.button.callback('⬅️ Volver', 'view:back:list'),
+      Markup.button.callback('Cerrar', `view:close:${task.id}`),
     ]);
+
+    return Markup.inlineKeyboard(rows);
   }
 
   private formatTaskCompleteConfirmPrompt(
@@ -5168,6 +5423,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.bold('Atajos utiles:'),
       '/nueva',
       '/pendientes',
+      '/buscar cuentas',
+      '/posponer 2 mañana',
       '/editar',
       '/alertas',
       '/ayuda',
@@ -5225,6 +5482,9 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '',
           this.bold('Comandos principales:'),
           '/pendientes',
+          '/pendientes vencidas',
+          '/pendientes sin fecha',
+          '/pendientes mias',
           '/hoy',
           '/familiares',
           '/completadas',
@@ -5239,6 +5499,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '/ver N',
           '/hecho N',
           '/eliminar N',
+          '/posponer N mañana',
+          '/buscar texto',
         ].join('\n');
       case 'editing':
         return [
@@ -5254,6 +5516,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '- fecha y hora',
           '- nota',
           '- alerta',
+          '',
+          this.bold('Desde Ver tarea tambien puedes entrar directo a:'),
+          '- fecha',
+          '- alerta',
+          '- asignacion',
           '',
           this.bold('Atajos de fecha/hora:'),
           '+30 min, +2 horas, Mañana, Sin fecha u Otro...',
@@ -5302,12 +5569,14 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           '/ayuda',
           '/nueva',
           '/pendientes',
+          '/buscar presupuesto',
           '/hoy',
           '/familiares',
           '/completadas',
           '/ver 2',
           '/nota 2',
           '/editar',
+          '/posponer 2 mañana',
           '/alertas',
           '/hecho 2',
           '/eliminar 2',
@@ -5416,10 +5685,12 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       { command: 'start', description: 'Iniciar o vincular tu cuenta' },
       { command: 'nueva', description: 'Crear una tarea guiada' },
       { command: 'pendientes', description: 'Ver tareas pendientes' },
+      { command: 'buscar', description: 'Buscar entre tareas pendientes' },
       { command: 'hoy', description: 'Ver tareas de hoy' },
       { command: 'familiares', description: 'Ver tareas familiares' },
       { command: 'completadas', description: 'Ver tareas completadas' },
       { command: 'ver', description: 'Ver detalle de una tarea' },
+      { command: 'posponer', description: 'Posponer una tarea de la lista' },
       { command: 'nota', description: 'Agregar o editar nota de una tarea' },
       {
         command: 'alertas',
