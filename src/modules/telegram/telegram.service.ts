@@ -103,8 +103,8 @@ type BulkCallbackResult = {
 
 const TELEGRAM_WEBHOOK_PATH = '/telegram/webhook';
 const MENU_NEW_TASK = '📝 Nueva tarea';
+const MENU_TODAY = '🗓️ Hoy';
 const MENU_PENDING = '📋 Ver tareas';
-const MENU_PENDING_LEGACY = '📋 Pendientes';
 const MENU_EDIT_FAMILY = '👨‍👩‍👧 Editar familia';
 const MENU_HELP = '❓ Ayuda';
 const MENU_CANCEL = 'Cancelar';
@@ -139,6 +139,8 @@ const CALLBACK_ALERTS_HOME = 'alerts:home';
 const CALLBACK_ALERTS_SECTION_REMINDERS = 'alerts:section:reminders';
 const CALLBACK_ALERTS_SECTION_BRIEFING = 'alerts:section:briefing';
 const CALLBACK_HELP_CANCEL = 'help:cancel';
+const CALLBACK_LISTS_HOME = 'lists:home';
+const CALLBACK_LISTS_CLOSE = 'lists:close';
 const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
 const CALLBACK_BULK_CANCEL = 'bulk:cancel';
 const CALLBACK_BULK_CONFIRM_COMPLETE = 'bulk:confirm:complete';
@@ -402,6 +404,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         callbackQuery: { data?: string };
       };
       await this.safeHandleHelpCallback(typedCtx);
+    });
+
+    this.bot.action(/^lists:/, async (ctx) => {
+      const typedCtx = ctx as unknown as BotCallbackContext & {
+        callbackQuery: { data?: string };
+      };
+      await this.safeHandleListsCallback(typedCtx);
     });
 
     this.bot.action(/^family:/, async (ctx) => {
@@ -709,6 +718,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       this.usersService.resolveTimezone(user),
       parsedFilter?.heading,
     );
+  }
+
+  private async handleTaskBrowseHome(
+    ctx: BotReplyContext,
+  ): Promise<BotResponse> {
+    await this.requireRegisteredUser(ctx);
+    return {
+      text: this.formatTaskBrowseHome(),
+      extra: this.withHtml(this.buildTaskBrowseHomeKeyboard()),
+    };
   }
 
   private async handleListFamily(ctx: BotTextContext) {
@@ -1608,22 +1627,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async tryHandleMenuAction(ctx: BotTextContext) {
-    const text = ctx.message.text.trim();
+    const normalizedText = this.normalizeMenuText(ctx.message.text);
 
-    switch (text) {
-      case MENU_NEW_TASK:
-        return this.startTaskWizard(ctx);
-      case MENU_PENDING:
-      case MENU_PENDING_LEGACY:
-      case 'Pendientes':
-        return this.handleListPending(ctx);
-      case MENU_EDIT_FAMILY:
-        return this.handleFamilyManagement(ctx);
-      case MENU_HELP:
-        return this.buildHelpHomeResponse();
-      default:
-        return null;
+    if (normalizedText === 'nueva tarea') {
+      return this.startTaskWizard(ctx);
     }
+
+    if (
+      normalizedText === 'ver tareas' ||
+      normalizedText === 'pendientes' ||
+      normalizedText === 'ver tarea'
+    ) {
+      return this.handleTaskBrowseHome(ctx);
+    }
+
+    if (normalizedText === 'hoy') {
+      return this.handleListToday(ctx);
+    }
+
+    if (normalizedText === 'editar familia') {
+      return this.handleFamilyManagement(ctx);
+    }
+
+    if (normalizedText === 'ayuda') {
+      return this.buildHelpHomeResponse();
+    }
+
+    return null;
   }
 
   private async safeHandleWizardCallback(
@@ -1841,6 +1871,47 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       }
 
       const result = this.handleHelpCallback(data);
+      await ctx.answerCbQuery(result.answerText);
+
+      if (result.editText) {
+        await ctx.editMessageText(result.editText, result.editExtra);
+      } else if (result.clearMarkup) {
+        await ctx.editMessageReplyMarkup(undefined);
+      }
+
+      if (result.reply) {
+        const payload = this.normalizeBotResponse(result.reply);
+        const defaultExtra = await this.getDefaultReplyMarkup(ctx);
+        await ctx.reply(
+          payload.text,
+          this.resolveReplyExtra(payload.text, payload.extra, defaultExtra),
+        );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Ocurrio un error inesperado.';
+      this.logger.warn(message);
+      await ctx.answerCbQuery(message);
+    }
+  }
+
+  private async safeHandleListsCallback(
+    ctx: BotCallbackContext & {
+      callbackQuery: { data?: string };
+    },
+  ) {
+    try {
+      const data = ctx.callbackQuery.data;
+      if (!data) {
+        await ctx.answerCbQuery();
+        return;
+      }
+
+      const result = await this.handleListsCallback(
+        ctx,
+        String(ctx.from.id),
+        data,
+      );
       await ctx.answerCbQuery(result.answerText);
 
       if (result.editText) {
@@ -3213,6 +3284,135 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private async handleListsCallback(
+    ctx: BotReplyContext,
+    userTelegramId: string,
+    data: string,
+  ): Promise<BulkCallbackResult> {
+    const user = await this.usersService.findByTelegramUserId(userTelegramId);
+    if (!user) {
+      throw new BadRequestException(
+        'Tu cuenta no esta vinculada. Usa /start y comparte tu contacto.',
+      );
+    }
+
+    if (data === CALLBACK_LISTS_HOME) {
+      return {
+        answerText: 'Ver tareas',
+        editText: this.formatTaskBrowseHome(),
+        editExtra: this.withHtml(this.buildTaskBrowseHomeKeyboard()),
+      };
+    }
+
+    if (data === CALLBACK_LISTS_CLOSE) {
+      return {
+        answerText: 'Cerrar',
+        clearMarkup: true,
+      };
+    }
+
+    const timezone = this.usersService.resolveTimezone(user);
+    const buildListResult = async (
+      listType: 'today' | 'pending' | 'family' | 'completed',
+      tasks: DisplayTask[],
+      allowBulkComplete: boolean,
+      allowBulkDelete: boolean,
+      headingOverride?: string,
+    ): Promise<BulkCallbackResult> => {
+      await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+      const response = this.buildTaskListResponse(
+        listType,
+        tasks,
+        allowBulkComplete,
+        allowBulkDelete,
+        timezone,
+        headingOverride,
+      );
+      const payload = this.normalizeBotResponse(response);
+      return {
+        answerText: 'Lista actualizada',
+        editText: payload.text,
+        editExtra: this.resolveReplyExtra(payload.text, payload.extra),
+      };
+    };
+
+    switch (data) {
+      case 'lists:today':
+        return buildListResult(
+          'today',
+          await this.tasksService.listTodayTasks(user.id),
+          true,
+          true,
+        );
+      case 'lists:pending':
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id),
+          true,
+          true,
+        );
+      case 'lists:family':
+        return buildListResult(
+          'family',
+          await this.tasksService.listFamilyTasks(user.id),
+          true,
+          true,
+        );
+      case 'lists:completed':
+        return buildListResult(
+          'completed',
+          await this.tasksService.listCompletedTasks(user.id),
+          false,
+          false,
+        );
+      case 'lists:overdue':
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id, {
+            filter: 'OVERDUE',
+          }),
+          true,
+          true,
+          'Estas son tus tareas pendientes vencidas',
+        );
+      case 'lists:nodate':
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id, {
+            filter: 'WITHOUT_DUE_DATE',
+          }),
+          true,
+          true,
+          'Estas son tus tareas pendientes sin fecha',
+        );
+      case 'lists:mine':
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id, {
+            filter: 'MINE',
+          }),
+          true,
+          true,
+          'Estas son tus tareas pendientes propias',
+        );
+      case 'lists:high':
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id, {
+            filter: 'HIGH_PRIORITY',
+          }),
+          true,
+          true,
+          'Estas son tus tareas pendientes de prioridad alta',
+        );
+      default:
+        return {
+          answerText: undefined,
+          clearMarkup: false,
+        };
+    }
+  }
+
   private handleHelpCallback(data: string): BulkCallbackResult {
     if (data === CALLBACK_HELP_CANCEL) {
       return {
@@ -3984,6 +4184,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       .toLowerCase()
       .normalize('NFD')
       .replace(/\p{Diacritic}/gu, '');
+  }
+
+  private normalizeMenuText(text: string) {
+    return text
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .replace(/\p{Extended_Pictographic}/gu, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private formatAssigneeLabel(
@@ -5414,6 +5626,38 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private formatTaskBrowseHome() {
+    return [
+      this.bold('Ver tareas'),
+      '',
+      this.bold('Elige la vista que quieres abrir.'),
+      '',
+      'Puedes revisar tus pendientes, las de hoy, familiares, completadas o filtrar rapido por estado.',
+    ].join('\n');
+  }
+
+  private buildTaskBrowseHomeKeyboard() {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('📋 Pendientes', 'lists:pending'),
+        Markup.button.callback('🗓️ Hoy', 'lists:today'),
+      ],
+      [
+        Markup.button.callback('👪 Familiares', 'lists:family'),
+        Markup.button.callback('✅ Completadas', 'lists:completed'),
+      ],
+      [
+        Markup.button.callback('🚨 Vencidas', 'lists:overdue'),
+        Markup.button.callback('📝 Sin fecha', 'lists:nodate'),
+      ],
+      [
+        Markup.button.callback('🙋 Mias', 'lists:mine'),
+        Markup.button.callback('‼️ Alta', 'lists:high'),
+      ],
+      [Markup.button.callback('Cerrar', CALLBACK_LISTS_CLOSE)],
+    ]);
+  }
+
   private formatHelpHome() {
     return [
       this.bold('Guia rapida del bot'),
@@ -5611,9 +5855,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       role === UserRole.FAMILY_ADMIN
         ? [
             [MENU_NEW_TASK, MENU_PENDING],
-            [MENU_EDIT_FAMILY, MENU_HELP],
+            [MENU_TODAY, MENU_EDIT_FAMILY],
+            [MENU_HELP],
           ]
-        : [[MENU_NEW_TASK, MENU_PENDING], [MENU_HELP]];
+        : [
+            [MENU_NEW_TASK, MENU_PENDING],
+            [MENU_TODAY, MENU_HELP],
+          ];
 
     return Markup.keyboard(rows).resize();
   }

@@ -353,6 +353,72 @@ describe('Telegram webhook flows (e2e)', () => {
     expect(lastSentText()).not.toContain('Tarea con fecha');
   });
 
+  it('abre un hub de navegacion al tocar Ver tareas desde el teclado inferior', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '10115',
+      telegramChatId: '20115',
+    });
+
+    await prisma.task.create({
+      data: {
+        familyId: user.familyId,
+        createdByUserId: user.id,
+        assignedToUserId: user.id,
+        title: 'Tarea sin fecha desde menu',
+        scope: TaskScope.PERSONAL,
+        priority: Priority.MEDIUM,
+      },
+    });
+
+    await sendMessageUpdate('📋 Ver tareas', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastSentText()).toContain('Ver tareas');
+    expect(lastSentPayload().reply_markup).toBeTruthy();
+
+    await sendCallbackUpdate('lists:nodate', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastEditedText()).toContain('pendientes sin fecha');
+    expect(lastEditedText()).toContain('Tarea sin fecha desde menu');
+  });
+
+  it('acepta tambien el texto simple Ver tareas y el acceso rapido Hoy del teclado inferior', async () => {
+    const user = await createLinkedUser(prisma, {
+      telegramUserId: '10116',
+      telegramChatId: '20116',
+    });
+
+    await prisma.task.create({
+      data: {
+        familyId: user.familyId,
+        createdByUserId: user.id,
+        assignedToUserId: user.id,
+        title: 'Tarea para hoy desde menu',
+        scope: TaskScope.PERSONAL,
+        priority: Priority.MEDIUM,
+        dueDate: new Date(),
+      },
+    });
+
+    await sendMessageUpdate('Ver tareas', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    expect(lastSentText()).toContain('Elige la vista que quieres abrir');
+
+    await sendMessageUpdate('🗓️ Hoy', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+    expect(lastSentText()).toContain('Esto tienes para hoy');
+    expect(lastSentText()).toContain('Tarea para hoy desde menu');
+  });
+
   it('permite posponer una tarea desde la ultima lista usando /posponer', async () => {
     const user = await createLinkedUser(prisma, {
       telegramUserId: '1012',
