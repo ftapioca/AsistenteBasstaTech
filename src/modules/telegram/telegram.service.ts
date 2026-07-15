@@ -139,7 +139,8 @@ const CALLBACK_ALERTS_HOME = 'alerts:home';
 const CALLBACK_ALERTS_SECTION_REMINDERS = 'alerts:section:reminders';
 const CALLBACK_ALERTS_SECTION_BRIEFING = 'alerts:section:briefing';
 const CALLBACK_HELP_CANCEL = 'help:cancel';
-const CALLBACK_LISTS_HOME = 'lists:home';
+const CALLBACK_LISTS_MENU = 'lists:menu';
+const CALLBACK_LISTS_BACK_TO_PENDING = 'lists:back:pending';
 const CALLBACK_LISTS_CLOSE = 'lists:close';
 const CALLBACK_BULK_START_DELETE = 'bulk:start:delete';
 const CALLBACK_BULK_CANCEL = 'bulk:cancel';
@@ -723,11 +724,16 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private async handleTaskBrowseHome(
     ctx: BotReplyContext,
   ): Promise<BotResponse> {
-    await this.requireRegisteredUser(ctx);
-    return {
-      text: this.formatTaskBrowseHome(),
-      extra: this.withHtml(this.buildTaskBrowseHomeKeyboard()),
-    };
+    const user = await this.requireRegisteredUser(ctx);
+    const tasks = await this.tasksService.listPendingTasks(user.id);
+    await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
+    return this.buildTaskListResponse(
+      'pending',
+      tasks,
+      true,
+      true,
+      this.usersService.resolveTimezone(user),
+    );
   }
 
   private async handleListFamily(ctx: BotTextContext) {
@@ -1191,6 +1197,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       'America/Santiago',
     ),
     headingOverride?: string,
+    backCallback?: string,
   ): BotResponse {
     const text = this.formatTaskList(
       listType,
@@ -1202,6 +1209,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       tasks,
       allowBulkComplete,
       allowBulkDelete,
+      backCallback,
     );
 
     if (!keyboard) {
@@ -1218,6 +1226,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     tasks: DisplayTask[],
     allowBulkComplete: boolean,
     allowBulkDelete: boolean,
+    backCallback?: string,
   ) {
     const buttons = [];
 
@@ -1243,11 +1252,20 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    if (buttons.length === 0) {
-      return null;
+    const rows = buttons.map((button) => [button]);
+
+    rows.push([
+      Markup.button.callback('🧭 Filtros y vistas', CALLBACK_LISTS_MENU),
+    ]);
+
+    if (backCallback) {
+      rows.push([
+        Markup.button.callback('⬅️ Volver', backCallback),
+        Markup.button.callback('Cerrar', CALLBACK_LISTS_CLOSE),
+      ]);
     }
 
-    return Markup.inlineKeyboard([buttons]);
+    return rows.length > 0 ? Markup.inlineKeyboard(rows) : null;
   }
 
   private async buildTaskCreatedResponse(
@@ -3296,11 +3314,13 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    if (data === CALLBACK_LISTS_HOME) {
+    if (data === CALLBACK_LISTS_MENU) {
       return {
-        answerText: 'Ver tareas',
+        answerText: 'Filtros y vistas',
         editText: this.formatTaskBrowseHome(),
-        editExtra: this.withHtml(this.buildTaskBrowseHomeKeyboard()),
+        editExtra: this.withHtml(
+          this.buildTaskBrowseHomeKeyboard(CALLBACK_LISTS_BACK_TO_PENDING),
+        ),
       };
     }
 
@@ -3318,6 +3338,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       allowBulkComplete: boolean,
       allowBulkDelete: boolean,
       headingOverride?: string,
+      backCallback?: string,
     ): Promise<BulkCallbackResult> => {
       await this.tasksService.storeTaskListContext(String(ctx.chat.id), tasks);
       const response = this.buildTaskListResponse(
@@ -3327,6 +3348,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         allowBulkDelete,
         timezone,
         headingOverride,
+        backCallback,
       );
       const payload = this.normalizeBotResponse(response);
       return {
@@ -3337,12 +3359,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
 
     switch (data) {
+      case CALLBACK_LISTS_BACK_TO_PENDING:
+        return buildListResult(
+          'pending',
+          await this.tasksService.listPendingTasks(user.id),
+          true,
+          true,
+        );
       case 'lists:today':
         return buildListResult(
           'today',
           await this.tasksService.listTodayTasks(user.id),
           true,
           true,
+          undefined,
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:pending':
         return buildListResult(
@@ -3350,6 +3381,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           await this.tasksService.listPendingTasks(user.id),
           true,
           true,
+          undefined,
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:family':
         return buildListResult(
@@ -3357,6 +3390,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           await this.tasksService.listFamilyTasks(user.id),
           true,
           true,
+          undefined,
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:completed':
         return buildListResult(
@@ -3364,6 +3399,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           await this.tasksService.listCompletedTasks(user.id),
           false,
           false,
+          undefined,
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:overdue':
         return buildListResult(
@@ -3374,6 +3411,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           true,
           true,
           'Estas son tus tareas pendientes vencidas',
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:nodate':
         return buildListResult(
@@ -3384,6 +3422,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           true,
           true,
           'Estas son tus tareas pendientes sin fecha',
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:mine':
         return buildListResult(
@@ -3394,6 +3433,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           true,
           true,
           'Estas son tus tareas pendientes propias',
+          CALLBACK_LISTS_MENU,
         );
       case 'lists:high':
         return buildListResult(
@@ -3404,6 +3444,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           true,
           true,
           'Estas son tus tareas pendientes de prioridad alta',
+          CALLBACK_LISTS_MENU,
         );
       default:
         return {
@@ -5630,17 +5671,17 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     return [
       this.bold('Ver tareas'),
       '',
-      this.bold('Elige la vista que quieres abrir.'),
+      this.bold('Elige la vista o filtro que quieres abrir.'),
       '',
-      'Puedes revisar tus pendientes, las de hoy, familiares, completadas o filtrar rapido por estado.',
+      'Tu lista principal sigue siendo Pendientes. Desde aqui puedes cambiar de vista o aplicar filtros rapidos.',
     ].join('\n');
   }
 
-  private buildTaskBrowseHomeKeyboard() {
-    return Markup.inlineKeyboard([
+  private buildTaskBrowseHomeKeyboard(backCallback?: string) {
+    const rows = [
       [
-        Markup.button.callback('📋 Pendientes', 'lists:pending'),
         Markup.button.callback('🗓️ Hoy', 'lists:today'),
+        Markup.button.callback('📋 Pendientes', 'lists:pending'),
       ],
       [
         Markup.button.callback('👪 Familiares', 'lists:family'),
@@ -5654,8 +5695,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         Markup.button.callback('🙋 Mias', 'lists:mine'),
         Markup.button.callback('‼️ Alta', 'lists:high'),
       ],
-      [Markup.button.callback('Cerrar', CALLBACK_LISTS_CLOSE)],
-    ]);
+    ];
+
+    if (backCallback) {
+      rows.push([
+        Markup.button.callback('⬅️ Volver', backCallback),
+        Markup.button.callback('Cerrar', CALLBACK_LISTS_CLOSE),
+      ]);
+    } else {
+      rows.push([Markup.button.callback('Cerrar', CALLBACK_LISTS_CLOSE)]);
+    }
+
+    return Markup.inlineKeyboard(rows);
   }
 
   private formatHelpHome() {

@@ -50,6 +50,7 @@ describe('Telegram webhook flows (e2e)', () => {
 
   const originalEnv = {
     databaseUrl: process.env.DATABASE_URL,
+    envFile: process.env.ENV_FILE,
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN,
     telegramWebhookUrl: process.env.TELEGRAM_WEBHOOK_URL,
     telegramWebhookSecret: process.env.TELEGRAM_WEBHOOK_SECRET,
@@ -60,6 +61,7 @@ describe('Telegram webhook flows (e2e)', () => {
   const testSchema = `e2e_${Date.now()}`;
 
   beforeAll(() => {
+    process.env.ENV_FILE = '.env.e2e.test';
     process.env.SCHEDULER_ENABLED = 'false';
     process.env.DATABASE_URL = buildTestDatabaseUrl(
       originalEnv.databaseUrl ?? '',
@@ -132,6 +134,7 @@ describe('Telegram webhook flows (e2e)', () => {
 
     jest.restoreAllMocks();
     process.env.DATABASE_URL = originalEnv.databaseUrl;
+    process.env.ENV_FILE = originalEnv.envFile;
     process.env.TELEGRAM_BOT_TOKEN = originalEnv.telegramBotToken;
     process.env.TELEGRAM_WEBHOOK_URL = originalEnv.telegramWebhookUrl;
     process.env.TELEGRAM_WEBHOOK_SECRET = originalEnv.telegramWebhookSecret;
@@ -375,8 +378,24 @@ describe('Telegram webhook flows (e2e)', () => {
       telegramUserId: Number(user.telegramUserId),
     });
 
-    expect(lastSentText()).toContain('Ver tareas');
+    expect(lastSentText()).toContain('Estas son tus tareas pendientes');
+    expect(lastSentText()).toContain('Tarea sin fecha desde menu');
     expect(lastSentPayload().reply_markup).toBeTruthy();
+    expect(lastSentInlineKeyboard()).toMatchObject([
+      [{ text: '🔎 Ver tarea' }],
+      [{ text: '✅ Completar varias' }],
+      [{ text: '🗑️ Eliminar varias' }],
+      [{ text: '🧭 Filtros y vistas' }],
+    ]);
+
+    await sendCallbackUpdate('lists:menu', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastEditedText()).toContain(
+      'Elige la vista o filtro que quieres abrir',
+    );
 
     await sendCallbackUpdate('lists:nodate', {
       chatId: Number(user.telegramChatId),
@@ -385,6 +404,13 @@ describe('Telegram webhook flows (e2e)', () => {
 
     expect(lastEditedText()).toContain('pendientes sin fecha');
     expect(lastEditedText()).toContain('Tarea sin fecha desde menu');
+
+    await sendCallbackUpdate('lists:back:pending', {
+      chatId: Number(user.telegramChatId),
+      telegramUserId: Number(user.telegramUserId),
+    });
+
+    expect(lastEditedText()).toContain('Estas son tus tareas pendientes');
   });
 
   it('acepta tambien el texto simple Ver tareas y el acceso rapido Hoy del teclado inferior', async () => {
@@ -409,7 +435,7 @@ describe('Telegram webhook flows (e2e)', () => {
       chatId: Number(user.telegramChatId),
       telegramUserId: Number(user.telegramUserId),
     });
-    expect(lastSentText()).toContain('Elige la vista que quieres abrir');
+    expect(lastSentText()).toContain('Estas son tus tareas pendientes');
 
     await sendMessageUpdate('🗓️ Hoy', {
       chatId: Number(user.telegramChatId),
@@ -918,6 +944,18 @@ describe('Telegram webhook flows (e2e)', () => {
       (call) => call.method === 'sendMessage',
     );
     return sentMessages.at(-1)?.payload ?? {};
+  }
+
+  function lastSentInlineKeyboard() {
+    const markup = lastSentPayload().reply_markup as
+      | {
+          inline_keyboard?: Array<
+            Array<{ text?: unknown; callback_data?: unknown }>
+          >;
+        }
+      | undefined;
+
+    return markup?.inline_keyboard ?? [];
   }
 
   function allSentTexts() {
